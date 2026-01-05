@@ -10,8 +10,6 @@ This module contains core simulation infrastructure including:
 """
 
 import os
-import shutil
-import tarfile
 import numpy as np
 import jax.numpy as jnp
 from jax import jit, random, lax, vmap, remat
@@ -58,22 +56,6 @@ def rename_file(filepath):
         return filepath 
 
 # get_shape, REF_SHAPE, and REF_SHAPE_SIZE are now imported from config_patchy_particle
-
-import tarfile
-def compress_directory(src_dir, target_dir):
-    os.makedirs(target_dir, exist_ok=True)
-    dir_name = os.path.basename(os.path.normpath(src_dir))
-    tar_path = os.path.join(target_dir, f"{dir_name}.tar")
-    # Create tar archive
-    with tarfile.open(tar_path, "w") as tar:
-        tar.add(src_dir, arcname=dir_name)
-    print(f"Successfully compressed target to: {tar_path}")
-    shutil.rmtree(src_dir)
-    print(f"Successfully deleted the folder: {src_dir}")
-
-
-    return tar_path
-
 
 def body_to_plot(body, thetas,radius=CENTER_RADIUS):
   
@@ -137,7 +119,7 @@ def run_sim(thetas_and_energy,
             key,
             kT = 1.,
             print_sim = False,
-            print_progress = True):
+            print_progress = False):
   # Access BOX_SIZE at runtime to get updated value
   import config_patchy_particle
   box_size = config_patchy_particle.BOX_SIZE
@@ -193,44 +175,14 @@ def run_sim(thetas_and_energy,
   step_fn = jit(step_fn)
   print('Init State', flush=True)
   state = init_fn(key, x0, mass=shape.mass())
-  print('Finished init state', flush=True)
-  do_step = lambda state, t: (step_fn(state), 0.)
+  do_step = lambda state, t: (step_fn(state), (state.position.center, state.position.orientation))
   do_step = jit(do_step)
 
-  # inner/outer: corresponds to forward/reverse (probably reversed order) mode AD
+  # Run simulation and collect trajectory
   inner_steps = jnp.arange(num_steps)
+  state, (positions, orientations) = lax.scan(do_step, state, inner_steps)
 
-  #def do_loss_step(state,i):
-    #state,_ = lax.scan(do_step, state, inner_steps)
-    #if print_progress and i%10==0:
-    #  jax.debug.print("Completed outer step: {i}/{total}", i=i+1, total=num_steps)
-    #return state, state.position.center
-
-  print(jnp.equal(jnp.mod(0, 1), 0))
-
-  def do_loss_step(state, i):
-    #state, _ = lax.scan(do_step, state, inner_steps)
-
-    if print_progress:                       # keep print_progress as a Python bool
-        # use JAX ops so the result is a traced boolean
-        is_tick = jnp.equal(jnp.mod(i, 1), 0)
-        def _do_print(ii):
-            # jax.debug.print works inside jitted/traced code
-            jax.debug.print("Completed outer step: {i}/{total}", i=ii+1, total=num_steps)
-            return 0
-        def _nop(ii):
-            return 0
-
-        # lax.cond accepts traced booleans and only runs _do_print when True
-        _ = lax.cond(is_tick, _do_print, _nop, i)
-
-    state, _ = lax.scan(do_step, state, inner_steps)
-
-    return state, state.position.center
-
-  do_loss_step = jit(remat(do_loss_step))
-  state, positions = lax.scan(do_loss_step, state, inner_steps)
-  return state, positions
+  return state, positions, orientations
 
 my_sim = jit(run_sim, static_argnums=(2,7))
 v_run_my_sim = jit(vmap(my_sim, in_axes=(None, 0, None, None, 0)), static_argnums=2)
@@ -242,12 +194,12 @@ def run_partial_sim(params, key, batch_size):
   random_IC_keys = random.split(rand_key, batch_size)
   init_positions = v_random_IC(params, random_IC_keys)
   sim_keys = random.split(run_key, batch_size)
-  states,_ = v_run_my_sim(params, init_positions, QUICK_STEPS, CENTER_RADIUS, sim_keys)
+  states, _, _ = v_run_my_sim(params, init_positions, QUICK_STEPS, CENTER_RADIUS, sim_keys)
   return states.position
 
 @jit
 def run_sim_and_get_positions(param, state, key):
-    xf, _ = v_run_my_sim(param, state, SQRT_NUM_STEPS_TO_OPT, CENTER_RADIUS, key)
+    xf, _, _ = v_run_my_sim(param, state, SQRT_NUM_STEPS_TO_OPT, CENTER_RADIUS, key)
     return xf.position, xf.position.center, xf.position.orientation
 
 def save_position(param, state, key, stepk, file_dir):

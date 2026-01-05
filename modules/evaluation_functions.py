@@ -159,9 +159,6 @@ def get_clusters(state, params, cl_type=shape_ID, allowance=patch_allowance, clu
     glow_list = [list(row) for row in final_matches]
     return len(final_matches), final_matches, glow_list
 
-
-g_find_square = jit(get_clusters)
-
 def make_cluster_list(state, params,batch_size = BATCH_SIZE):
     squares = np.zeros(batch_size)
 
