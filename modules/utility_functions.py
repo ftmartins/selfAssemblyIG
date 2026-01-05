@@ -25,7 +25,7 @@ from config_patchy_particle import *
 
 def bprint(bug_text, print_bug = bug_print):
      if print_bug:
-         print(f"From Bug-Printer: {bug_text}")
+         print(f"From Bug-Printer: {bug_text}", flush=True)
      else:
          return
      
@@ -115,15 +115,20 @@ def energy_matrix(eng):
 
 def random_IC(thetas_and_energy, key):
   # generate random initial condition (random physical position of each particles)
+  import config_patchy_particle
   thetas = thetas_and_energy[:NUM_PATCHES]
   shape = thetas_to_shape(thetas, radius = CENTER_RADIUS)
-  displacement, shift = space.periodic(BOX_SIZE)
+  # Access NUM_PARTICLES and BOX_SIZE at runtime to get updated values
+  num_particles = config_patchy_particle.NUM_PARTICLES
+  box_size = config_patchy_particle.BOX_SIZE
+  displacement, shift = space.periodic(box_size)
   key, pos_key, angle_key = random.split(key, 3)
-  R = BOX_SIZE * random.uniform(pos_key, (NUM_PARTICLES, 2), dtype=jnp.float64) #random initial position
+  R = box_size * random.uniform(pos_key, (num_particles, 2), dtype=jnp.float64) #random initial position
   angles = random.uniform(angle_key, (len(R),), dtype=jnp.float64) * jnp.pi * 2 #random initial orientation
   body = rigid_body.RigidBody(R, angles)
   return body
 v_random_IC = vmap(random_IC, (None, 0))
+
 
 def run_sim(thetas_and_energy,
             x0,
@@ -132,13 +137,17 @@ def run_sim(thetas_and_energy,
             key,
             kT = 1.,
             print_sim = False,
-            print_progress = False):
+            print_progress = True):
+  # Access BOX_SIZE at runtime to get updated value
+  import config_patchy_particle
+  box_size = config_patchy_particle.BOX_SIZE
+
   thetas_and_energy = thetas_and_energy.at[0].set(0.0) #fix one patch position
   thetas = thetas_and_energy[:NUM_PATCHES]
   eng = thetas_and_energy[NUM_PATCHES:]
   eng_mat = energy_matrix(eng)
   shape = thetas_to_shape(thetas, radius=CENTER_RADIUS)
-  displacement, shift = space.periodic(BOX_SIZE)
+  displacement, shift = space.periodic(box_size)
 
   morse_eps = jnp.pad(eng_mat, pad_width=(1, 0))
   soft_sphere_eps = jnp.zeros((len(thetas) + 1, len(thetas) + 1))
@@ -178,20 +187,45 @@ def run_sim(thetas_and_energy,
   pair_energy_fn = lambda R, **kwargs: pair_energy_soft(R, **kwargs) + pair_energy_morse(R, **kwargs)
   energy_fn = rigid_body.point_energy(pair_energy_fn, shape) #note, this is for every particle being the SAME shape, will need to amend this for multiple types of particles
 
+  print('Create NVT Nose Hoover', flush=True)
+
   init_fn, step_fn = simulate.nvt_nose_hoover(energy_fn, shift, DT, kT)
   step_fn = jit(step_fn)
+  print('Init State', flush=True)
   state = init_fn(key, x0, mass=shape.mass())
-
+  print('Finished init state', flush=True)
   do_step = lambda state, t: (step_fn(state), 0.)
   do_step = jit(do_step)
 
   # inner/outer: corresponds to forward/reverse (probably reversed order) mode AD
   inner_steps = jnp.arange(num_steps)
 
-  def do_loss_step(state,i):
-    state,_ = lax.scan(do_step, state, inner_steps)
-    if print_progress:
-      jax.debug.print("Completed outer step: {i}/{total}", i=i+1, total=num_steps)
+  #def do_loss_step(state,i):
+    #state,_ = lax.scan(do_step, state, inner_steps)
+    #if print_progress and i%10==0:
+    #  jax.debug.print("Completed outer step: {i}/{total}", i=i+1, total=num_steps)
+    #return state, state.position.center
+
+  print(jnp.equal(jnp.mod(0, 1), 0))
+
+  def do_loss_step(state, i):
+    #state, _ = lax.scan(do_step, state, inner_steps)
+
+    if print_progress:                       # keep print_progress as a Python bool
+        # use JAX ops so the result is a traced boolean
+        is_tick = jnp.equal(jnp.mod(i, 1), 0)
+        def _do_print(ii):
+            # jax.debug.print works inside jitted/traced code
+            jax.debug.print("Completed outer step: {i}/{total}", i=ii+1, total=num_steps)
+            return 0
+        def _nop(ii):
+            return 0
+
+        # lax.cond accepts traced booleans and only runs _do_print when True
+        _ = lax.cond(is_tick, _do_print, _nop, i)
+
+    state, _ = lax.scan(do_step, state, inner_steps)
+
     return state, state.position.center
 
   do_loss_step = jit(remat(do_loss_step))
