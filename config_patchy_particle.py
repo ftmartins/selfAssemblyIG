@@ -3,7 +3,7 @@ Configuration file for patchy particle optimization and yield simulations.
 
 All global constants and parameters are defined here.
 """
-
+KEY_PARAM_YIELD
 import numpy as np
 import jax.numpy as jnp
 from jax_md import space
@@ -46,20 +46,20 @@ kT = 1.0
 # OPTIMIZATION PARAMETERS
 # ============================================================================
 
+NUM_STEPS = 40000  # Full simulation steps
+NUM_STEPS_TO_OPT = 1000  # Steps during optimization
+SQRT_NUM_STEPS_TO_OPT = int(np.sqrt(NUM_STEPS_TO_OPT))
+QUICK_STEPS = int(np.sqrt((NUM_STEPS - NUM_STEPS_TO_OPT)))
+
+
 # Particle count for optimization
 NUM_PARTICLES = 16
 NUM_PARTICLES_OPT = NUM_PARTICLES  # Alias for clarity
 
 # Density and box size
-DENSITY = 0.2
+DENSITY = 0.1
 get_BOX_SIZE = lambda phi, N, rad: np.sqrt(N * np.pi * rad**2 / phi)
 BOX_SIZE = get_BOX_SIZE(DENSITY, NUM_PARTICLES, CENTER_RADIUS)
-
-# Simulation length
-NUM_STEPS = 40000  # Full simulation steps
-NUM_STEPS_TO_OPT = 1000  # Steps during optimization
-SQRT_NUM_STEPS_TO_OPT = int(np.sqrt(NUM_STEPS_TO_OPT))
-QUICK_STEPS = int(np.sqrt((NUM_STEPS - NUM_STEPS_TO_OPT)))
 
 # Optimization hyperparameters
 BATCH_SIZE = 64
@@ -92,10 +92,10 @@ LOG_STEPS = True
 # ============================================================================
 
 # Particle count for yield measurement (scaled up from notebook's 20)
-NUM_PARTICLES_YIELD = 100
+NUM_PARTICLES_YIELD = 1000
 
 # Simulation length
-NUM_STEPS_YIELD = 40_000
+NUM_STEPS_YIELD = 8000#0
 
 # Box size for yield simulation
 BOX_SIZE_YIELD = get_BOX_SIZE(DENSITY, NUM_PARTICLES_YIELD, CENTER_RADIUS)
@@ -184,7 +184,7 @@ JOBID = "optimization_run"
 
 KEY_PARAM = 0
 KEY_PARAM_OPT = 0
-KEY_PARAM_YIELD = 123
+KEY_PARAM_YIELD = 1273
 
 # ============================================================================
 # DERIVED PARAMETERS (computed from above)
@@ -219,3 +219,4 @@ key = random.PRNGKey(KEY_PARAM)
 print("Configuration loaded successfully!")
 print(f"  Optimization: {NUM_PARTICLES} particles, box size {BOX_SIZE:.2f}")
 print(f"  Yield measurement: {NUM_PARTICLES_YIELD} particles, box size {BOX_SIZE_YIELD:.2f}")
+
