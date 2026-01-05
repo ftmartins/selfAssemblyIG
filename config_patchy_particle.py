@@ -3,7 +3,6 @@ Configuration file for patchy particle optimization and yield simulations.
 
 All global constants and parameters are defined here.
 """
-KEY_PARAM_YIELD
 import numpy as np
 import jax.numpy as jnp
 from jax_md import space
