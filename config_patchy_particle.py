@@ -19,7 +19,7 @@ config.update("jax_debug_nans", True)
 # ============================================================================
 # CONTROL FLAGS
 # ============================================================================
-bug_print = False  # Enable debug printing
+bug_print = True  # Enable debug printing
 FIND_HESSIAN = False  # Compute Hessian during optimization
 RAND_ENG_CHECK = True  # Enable energy randomization check
 
@@ -66,14 +66,14 @@ BATCH_SIZE = 64
 LEARNING_RATES = [0.5, 0.1, 0.05]  # Coarse, medium, fine
 OPTIMIZER = 'adam'  # 'adam' or 'rms'
 OPTIMIZER_TYPE = OPTIMIZER  # Alias
-OPT_STEPS = 100
+OPT_STEPS = 2
 OPT_RUNS = 3
 
 # Three-stage optimization schedule
 OPT_STAGE_STEPS = [
-    OPT_STEPS // 6,   # Stage 1: Coarse (~17 steps)
-    OPT_STEPS // 30,  # Stage 2: Medium (~3 steps)
-    OPT_STEPS // 30,  # Stage 3: Fine (~3 steps)
+    OPT_STEPS,   # Stage 1: Coarse (~17 steps)
+    OPT_STEPS,  # Stage 2: Medium (~3 steps)
+    OPT_STEPS,  # Stage 3: Fine (~3 steps)
 ]
 
 # Energy constraints
