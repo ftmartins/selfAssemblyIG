@@ -31,19 +31,11 @@ from .evaluation_functions import avg_loss, make_cluster_list
 
 print("Loading Self-Assembly Optimizer Functions")
 def get_mean_loss(params, initial_position, keys):
-    states,_ = v_run_my_sim(params, initial_position, SQRT_NUM_STEPS_TO_OPT, CENTER_RADIUS, keys)
+    states, _, _ = v_run_my_sim(params, initial_position, SQRT_NUM_STEPS_TO_OPT, CENTER_RADIUS, keys)
     return avg_loss(states.position.center)
 
 g_mean_loss = jit(value_and_grad(get_mean_loss)) #if need to, switch to jacfwd
 #g_mean_loss = jit(jacfwd(get_mean_loss)) #this gives nans, no idea why
-
-def get_initial_positions(params, key, batch_size):
-    rand_key, run_key = random.split(key, 2)    
-    make_IC_keys = random.split(rand_key, batch_size)
-    init_positions = v_make_IC(params, make_IC_keys)
-    sim_keys = random.split(run_key, batch_size)
-    states,_ = v_run_my_sim(params, init_positions, 0, CENTER_RADIUS, sim_keys)
-    return states.position
 
 def find_like(params, num_patches=NUM_PATCHES, buffer = .9):
     likes = np.zeros(num_patches)
