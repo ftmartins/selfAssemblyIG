@@ -88,10 +88,16 @@ def load_parameters(param_file):
     print(f"  Parameters: {final_params}")
     print(f"  Opening angle: {np.rad2deg(final_params[0]):.2f}°")
 
+    # Extract param identifier from filename
+    # e.g., 'optimal_params/triangle_params_20251208_121534.npz' -> 'triangle_params_20251208_121534'
+    param_basename = os.path.basename(param_file)
+    param_id = os.path.splitext(param_basename)[0]  # Remove .npz extension
+
     return {
         'shape': shape,
         'params': final_params,
-        'param_file': param_file
+        'param_file': param_file,
+        'param_id': param_id
     }
 
 def regular_ngon_reference(n, R=1.0, opening_angle_deg=100.0):
@@ -144,7 +150,7 @@ def regular_ngon_reference(n, R=1.0, opening_angle_deg=100.0):
 
     return positions, orientations, patch_angles
 
-def load_checkpoint(output_dir, seed):
+def load_checkpoint(output_dir, seed, param_id=None):
     """
     Load full MD checkpoint if it exists for the given seed.
 
@@ -154,14 +160,27 @@ def load_checkpoint(output_dir, seed):
         Output directory path
     seed : int
         Random seed (KEY_PARAM_YIELD)
+    param_id : str, optional
+        Parameter file identifier to match specific checkpoint
 
     Returns
     -------
     dict or None : Checkpoint data with full MD state if exists, None otherwise
     """
-    checkpoint_pattern = os.path.join(output_dir, f"checkpoint_seed{seed}_*.npz")
     import glob
-    checkpoint_files = glob.glob(checkpoint_pattern)
+
+    # Try new naming convention first (with param_id), then fall back to old
+    if param_id:
+        checkpoint_pattern = os.path.join(output_dir, f"checkpoint_{param_id}_seed{seed}_*.npz")
+        checkpoint_files = glob.glob(checkpoint_pattern)
+
+        # Fall back to old naming if no match
+        if not checkpoint_files:
+            checkpoint_pattern = os.path.join(output_dir, f"checkpoint_seed{seed}_*.npz")
+            checkpoint_files = glob.glob(checkpoint_pattern)
+    else:
+        checkpoint_pattern = os.path.join(output_dir, f"checkpoint_seed{seed}_*.npz")
+        checkpoint_files = glob.glob(checkpoint_pattern)
 
     if not checkpoint_files:
         return None
@@ -181,7 +200,7 @@ def load_checkpoint(output_dir, seed):
         'num_particles': int(checkpoint['num_particles'])
     }
 
-def save_checkpoint(output_dir, seed, steps_completed, full_md_state, params, num_particles):
+def save_checkpoint(output_dir, seed, steps_completed, full_md_state, params, num_particles, param_id=None):
     """
     Save full MD simulation checkpoint including velocities and thermostat state.
 
@@ -199,13 +218,21 @@ def save_checkpoint(output_dir, seed, steps_completed, full_md_state, params, nu
         Simulation parameters
     num_particles : int
         Number of particles
+    param_id : str, optional
+        Parameter file identifier (e.g., 'triangle_params_20251208_121534')
     """
     os.makedirs(output_dir, exist_ok=True)
 
-    checkpoint_file = os.path.join(
-        output_dir,
-        f"checkpoint_seed{seed}_step{steps_completed}.npz"
-    )
+    if param_id:
+        checkpoint_file = os.path.join(
+            output_dir,
+            f"checkpoint_{param_id}_seed{seed}_step{steps_completed}.npz"
+        )
+    else:
+        checkpoint_file = os.path.join(
+            output_dir,
+            f"checkpoint_seed{seed}_step{steps_completed}.npz"
+        )
 
     # Save full state using pickle
     np.savez(
@@ -221,7 +248,7 @@ def save_checkpoint(output_dir, seed, steps_completed, full_md_state, params, nu
     print(f"Checkpoint saved: {checkpoint_file} ({steps_completed} steps)")
     return checkpoint_file
 
-def save_trajectory(output_dir, seed, positions, orientations, step_indices, params, append=False):
+def save_trajectory(output_dir, seed, positions, orientations, step_indices, params, append=False, param_id=None):
     """
     Save or append trajectory data.
 
@@ -241,10 +268,15 @@ def save_trajectory(output_dir, seed, positions, orientations, step_indices, par
         Simulation parameters
     append : bool
         If True, append to existing trajectory file
+    param_id : str, optional
+        Parameter file identifier (e.g., 'triangle_params_20251208_121534')
     """
     os.makedirs(output_dir, exist_ok=True)
 
-    trajectory_file = os.path.join(output_dir, f"trajectory_seed{seed}.npz")
+    if param_id:
+        trajectory_file = os.path.join(output_dir, f"trajectory_{param_id}_seed{seed}.npz")
+    else:
+        trajectory_file = os.path.join(output_dir, f"trajectory_seed{seed}.npz")
 
     if append and os.path.exists(trajectory_file):
         # Load existing trajectory and append
@@ -485,12 +517,13 @@ def run_yield_simulation(params_dict, args):
     yield_params = make_params(params_dict['params'])
 
     # Check for existing checkpoint
-    checkpoint = load_checkpoint(args.output_dir, args.seed)
+    checkpoint = load_checkpoint(args.output_dir, args.seed, param_id=params_dict.get('param_id'))
 
     # Determine starting point
     if checkpoint:
         print(f"Resuming from checkpoint: {checkpoint['steps_completed']} steps completed")
-        current_state = checkpoint['full_md_state']
+        full_md_state_checkpoint = checkpoint['full_md_state']
+        current_state = full_md_state_checkpoint.position  # Extract position for next my_sim call
         start_step = checkpoint['steps_completed']
     else:
         print("Starting new simulation...")
@@ -503,11 +536,20 @@ def run_yield_simulation(params_dict, args):
     if start_step >= args.num_steps:
         print(f"Simulation already complete ({start_step}/{args.num_steps} steps)")
         print("Loading existing trajectory...")
-        trajectory_file = os.path.join(args.output_dir, f"trajectory_seed{args.seed}.npz")
+
+        # Try new naming first, fall back to old
+        param_id = params_dict.get('param_id')
+        if param_id:
+            trajectory_file = os.path.join(args.output_dir, f"trajectory_{param_id}_seed{args.seed}.npz")
+            if not os.path.exists(trajectory_file):
+                trajectory_file = os.path.join(args.output_dir, f"trajectory_seed{args.seed}.npz")
+        else:
+            trajectory_file = os.path.join(args.output_dir, f"trajectory_seed{args.seed}.npz")
+
         if os.path.exists(trajectory_file):
             traj_data = np.load(trajectory_file, allow_pickle=True)
             # Use checkpoint state for final_state
-            final_state = current_state
+            final_state = full_md_state_checkpoint
         else:
             raise FileNotFoundError("Checkpoint exists but trajectory file not found")
     else:
@@ -527,7 +569,7 @@ def run_yield_simulation(params_dict, args):
             chunk_key = random.PRNGKey(args.seed + chunk_start)
 
             # Run this chunk
-            current_state, pos_chunk, ori_chunk = my_sim(
+            full_md_state, pos_chunk, ori_chunk = my_sim(
                 yield_params,
                 current_state,
                 chunk_steps,
@@ -540,17 +582,24 @@ def run_yield_simulation(params_dict, args):
             positions_chunks.append(np.array(pos_chunk))
             orientations_chunks.append(np.array(ori_chunk))
 
-            # Save checkpoint
+            # Save checkpoint with full MD state
             save_checkpoint(
                 args.output_dir,
                 args.seed,
                 chunk_start + chunk_steps,
-                current_state,
+                full_md_state,
                 yield_params,
-                args.num_particles
+                args.num_particles,
+                param_id=params_dict.get('param_id')
             )
 
+            # Update current_state with the position for next iteration
+            current_state = full_md_state.position
+
         print("Simulation complete!")
+
+        # Store final state (the last full MD state from the loop)
+        final_state = full_md_state
 
         # Concatenate all chunks
         positions_full = np.concatenate(positions_chunks, axis=0)
@@ -571,10 +620,9 @@ def run_yield_simulation(params_dict, args):
             orientations_history,
             step_indices,
             yield_params,
-            append=False
+            append=False,
+            param_id=params_dict.get('param_id')
         )
-
-        final_state = current_state
 
     # Count polygons
     print("\nCounting polygons...")
@@ -625,10 +673,18 @@ def save_yield_results(params_dict, args, final_state, polygon_counts,
     os.makedirs(args.output_dir, exist_ok=True)
 
     shape_name = params_dict['shape']
-    output_file = os.path.join(
-        args.output_dir,
-        f"{shape_name}_yields_{timestamp}_{args.seed}.npz"
-    )
+    param_id = params_dict.get('param_id', '')
+
+    if param_id:
+        output_file = os.path.join(
+            args.output_dir,
+            f"{param_id}_yields_{timestamp}_seed{args.seed}.npz"
+        )
+    else:
+        output_file = os.path.join(
+            args.output_dir,
+            f"{shape_name}_yields_{timestamp}_{args.seed}.npz"
+        )
 
     box_size_yield = get_BOX_SIZE(DENSITY, args.num_particles, CENTER_RADIUS)
 
@@ -648,10 +704,16 @@ def save_yield_results(params_dict, args, final_state, polygon_counts,
     )
 
     # Text summary
-    summary_file = os.path.join(
-        args.output_dir,
-        f"{shape_name}_yield_summary_{timestamp}_{args.seed}.txt"
-    )
+    if param_id:
+        summary_file = os.path.join(
+            args.output_dir,
+            f"{param_id}_yield_summary_{timestamp}_seed{args.seed}.txt"
+        )
+    else:
+        summary_file = os.path.join(
+            args.output_dir,
+            f"{shape_name}_yield_summary_{timestamp}_{args.seed}.txt"
+        )
 
     with open(summary_file, 'w') as f:
         f.write(f"Patchy Particle Yield Results\n")
