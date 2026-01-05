@@ -170,20 +170,24 @@ def count_polygons(state, params, box_size, patch_allowance=None, cluster_check=
 
         if shape_id == 'triangle':
             radius = 1.0 / np.sin(np.pi/3)
-            return regular_ngon_reference(3, R=radius, opening_angle_deg=100.0)[0]
+            return regular_ngon_reference(3, R=radius, opening_angle_deg=params[1])[0]
         elif shape_id == 'square':
             radius = 1.0 / np.sin(np.pi/4)
-            return regular_ngon_reference(4, R=radius, opening_angle_deg=100.0)[0]
+            return regular_ngon_reference(4, R=radius, opening_angle_deg=params[1])[0]
         elif shape_id == 'pentagon':
             radius = 1.0 / np.sin(np.pi/5)
-            return regular_ngon_reference(5, R=radius, opening_angle_deg=100.0)[0]
+            return regular_ngon_reference(5, R=radius, opening_angle_deg=params[1])[0]
         elif shape_id == 'hexagon':
             radius = 1.0 / np.sin(np.pi/6)
-            return regular_ngon_reference(6, R=radius, opening_angle_deg=100.0)[0]
+            return regular_ngon_reference(6, R=radius, opening_angle_deg=params[1])[0]
+        elif shape_id == 'heptagon':
+            radius = 1.0 / np.sin(np.pi/7)
+            return regular_ngon_reference(7, R=radius, opening_angle_deg=params[1])[0]
+        elif shape_id == 'octagon':
+            radius = 1.0 / np.sin(np.pi/8)
+            return regular_ngon_reference(8, R=radius, opening_angle_deg=params[1])[0]        
         else:
-            radius = 1.0 / np.sin(np.pi/4)
-            return regular_ngon_reference(4, R=radius, opening_angle_deg=100.0)[0]
-
+            raise ValueError("Invalid shape_id")
     # Get particle centers and orientations
     center_pos = np.array(state.center)
     orientations = np.array(state.orientation)
@@ -218,6 +222,8 @@ def count_polygons(state, params, box_size, patch_allowance=None, cluster_check=
         (4, 'square'),
         (5, 'pentagon'),
         (6, 'hexagon')
+        (7, 'heptagon'),
+        (8, 'octagon')
     ]
 
     polygon_counts = {
@@ -225,6 +231,8 @@ def count_polygons(state, params, box_size, patch_allowance=None, cluster_check=
         'square': 0,
         'pentagon': 0,
         'hexagon': 0,
+        'heptagon': 0,
+        'octagon': 0,
         'monomers': 0,
         'other': 0
     }
@@ -345,13 +353,13 @@ def run_yield_simulation(params_dict, args):
     yield_params = make_params(params_dict['params'])
 
     # Generate initial condition
-    print("Generating initial condition...")
+    print("Generating initial condition...", flush=True)
     yield_key = random.PRNGKey(KEY_PARAM_YIELD)
     initial_body = random_IC(yield_params, yield_key)
 
     # Run simulation
     print("Running simulation...")
-    print("This may take several minutes...")
+    print("This may take several minutes...", flush=True)
 
     final_state, positions_history = my_sim(
         yield_params,
@@ -361,6 +369,8 @@ def run_yield_simulation(params_dict, args):
         yield_key,
         kT=kT,
     )
+
+    print(positions_history.shape, 'shape positions history')
 
     print("Simulation complete!")
 
@@ -377,6 +387,8 @@ def run_yield_simulation(params_dict, args):
         'square': 4,
         'pentagon': 5,
         'hexagon': 6,
+        'heptagon': 7,
+        'octagon': 8,
         'monomers': 1,
         'other': 0
     }
@@ -413,7 +425,7 @@ def save_yield_results(params_dict, args, final_state, polygon_counts,
     shape_name = params_dict['shape']
     output_file = os.path.join(
         args.output_dir,
-        f"{shape_name}_yields_{timestamp}.npz"
+        f"{shape_name}_yields_{timestamp}_{KEY_PARAM_YIELD}.npz"
     )
 
     box_size_yield = get_BOX_SIZE(DENSITY, args.num_particles, CENTER_RADIUS)
@@ -436,7 +448,7 @@ def save_yield_results(params_dict, args, final_state, polygon_counts,
     # Text summary
     summary_file = os.path.join(
         args.output_dir,
-        f"{shape_name}_yield_summary_{timestamp}.txt"
+        f"{shape_name}_yield_summary_{timestamp}_{KEY_PARAM_YIELD}.txt"
     )
 
     with open(summary_file, 'w') as f:
@@ -478,9 +490,11 @@ def main():
     # Load parameters
     params_dict = load_parameters(args.params)
 
+    print(args.num_particles, 'num particles args')
+
     # Run simulation
     final_state, polygon_counts, yields = run_yield_simulation(params_dict, args)
-
+    
     # Save results
     output_file = save_yield_results(
         params_dict, args, final_state, polygon_counts, yields, timestamp
