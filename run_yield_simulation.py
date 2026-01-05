@@ -169,12 +169,18 @@ def load_checkpoint(output_dir, seed, param_id=None):
     """
     import glob
 
-    # Try new naming convention first (with param_id), then fall back to old
+    # Try new directory structure first: output_dir/{param_id}/seed{seed}/checkpoint_step*.npz
     if param_id:
-        checkpoint_pattern = os.path.join(output_dir, f"checkpoint_{param_id}_seed{seed}_*.npz")
+        checkpoint_dir = os.path.join(output_dir, param_id, f"seed{seed}")
+        checkpoint_pattern = os.path.join(checkpoint_dir, "checkpoint_step*.npz")
         checkpoint_files = glob.glob(checkpoint_pattern)
 
-        # Fall back to old naming if no match
+        # Fall back to old flat naming if no match
+        if not checkpoint_files:
+            checkpoint_pattern = os.path.join(output_dir, f"checkpoint_{param_id}_seed{seed}_*.npz")
+            checkpoint_files = glob.glob(checkpoint_pattern)
+
+        # Fall back to even older naming
         if not checkpoint_files:
             checkpoint_pattern = os.path.join(output_dir, f"checkpoint_seed{seed}_*.npz")
             checkpoint_files = glob.glob(checkpoint_pattern)
@@ -221,14 +227,16 @@ def save_checkpoint(output_dir, seed, steps_completed, full_md_state, params, nu
     param_id : str, optional
         Parameter file identifier (e.g., 'triangle_params_20251208_121534')
     """
-    os.makedirs(output_dir, exist_ok=True)
-
+    # Create directory structure: output_dir/{param_id}/seed{seed}/
     if param_id:
+        checkpoint_dir = os.path.join(output_dir, param_id, f"seed{seed}")
+        os.makedirs(checkpoint_dir, exist_ok=True)
         checkpoint_file = os.path.join(
-            output_dir,
-            f"checkpoint_{param_id}_seed{seed}_step{steps_completed}.npz"
+            checkpoint_dir,
+            f"checkpoint_step{steps_completed}.npz"
         )
     else:
+        os.makedirs(output_dir, exist_ok=True)
         checkpoint_file = os.path.join(
             output_dir,
             f"checkpoint_seed{seed}_step{steps_completed}.npz"
@@ -271,11 +279,13 @@ def save_trajectory(output_dir, seed, positions, orientations, step_indices, par
     param_id : str, optional
         Parameter file identifier (e.g., 'triangle_params_20251208_121534')
     """
-    os.makedirs(output_dir, exist_ok=True)
-
+    # Create directory structure: output_dir/{param_id}/seed{seed}/
     if param_id:
-        trajectory_file = os.path.join(output_dir, f"trajectory_{param_id}_seed{seed}.npz")
+        trajectory_dir = os.path.join(output_dir, param_id, f"seed{seed}")
+        os.makedirs(trajectory_dir, exist_ok=True)
+        trajectory_file = os.path.join(trajectory_dir, f"trajectory.npz")
     else:
+        os.makedirs(output_dir, exist_ok=True)
         trajectory_file = os.path.join(output_dir, f"trajectory_seed{seed}.npz")
 
     if append and os.path.exists(trajectory_file):
@@ -537,10 +547,14 @@ def run_yield_simulation(params_dict, args):
         print(f"Simulation already complete ({start_step}/{args.num_steps} steps)")
         print("Loading existing trajectory...")
 
-        # Try new naming first, fall back to old
+        # Try new directory structure first, fall back to old
         param_id = params_dict.get('param_id')
         if param_id:
-            trajectory_file = os.path.join(args.output_dir, f"trajectory_{param_id}_seed{args.seed}.npz")
+            # New structure: output_dir/{param_id}/seed{seed}/trajectory.npz
+            trajectory_file = os.path.join(args.output_dir, param_id, f"seed{args.seed}", "trajectory.npz")
+            if not os.path.exists(trajectory_file):
+                # Old flat naming
+                trajectory_file = os.path.join(args.output_dir, f"trajectory_{param_id}_seed{args.seed}.npz")
             if not os.path.exists(trajectory_file):
                 trajectory_file = os.path.join(args.output_dir, f"trajectory_seed{args.seed}.npz")
         else:
@@ -675,12 +689,16 @@ def save_yield_results(params_dict, args, final_state, polygon_counts,
     shape_name = params_dict['shape']
     param_id = params_dict.get('param_id', '')
 
+    # Create directory structure: output_dir/{param_id}/
     if param_id:
+        results_dir = os.path.join(args.output_dir, param_id)
+        os.makedirs(results_dir, exist_ok=True)
         output_file = os.path.join(
-            args.output_dir,
-            f"{param_id}_yields_{timestamp}_seed{args.seed}.npz"
+            results_dir,
+            f"yields_{timestamp}_seed{args.seed}.npz"
         )
     else:
+        os.makedirs(args.output_dir, exist_ok=True)
         output_file = os.path.join(
             args.output_dir,
             f"{shape_name}_yields_{timestamp}_{args.seed}.npz"
@@ -706,8 +724,8 @@ def save_yield_results(params_dict, args, final_state, polygon_counts,
     # Text summary
     if param_id:
         summary_file = os.path.join(
-            args.output_dir,
-            f"{param_id}_yield_summary_{timestamp}_seed{args.seed}.txt"
+            results_dir,
+            f"yield_summary_{timestamp}_seed{args.seed}.txt"
         )
     else:
         summary_file = os.path.join(
