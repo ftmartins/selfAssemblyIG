@@ -41,6 +41,12 @@ def parse_arguments():
         help='Path to optimized parameter NPZ file'
     )
     parser.add_argument(
+        '--seed',
+        type=int,
+        default=KEY_PARAM_YIELD,
+        help=f'Random seed for simulation (default: {KEY_PARAM_YIELD})'
+    )
+    parser.add_argument(
         '--num_particles',
         type=int,
         default=NUM_PARTICLES_YIELD,
@@ -449,7 +455,7 @@ def run_yield_simulation(params_dict, args):
     params_dict : dict
         Loaded parameter dictionary
     args : Namespace
-        Command-line arguments
+        Command-line arguments (includes seed)
 
     Returns
     -------
@@ -468,6 +474,7 @@ def run_yield_simulation(params_dict, args):
     print(f"\n{'='*80}")
     print(f"Yield Simulation with Checkpointing")
     print(f"{'='*80}")
+    print(f"Random seed: {args.seed}")
     print(f"Number of particles: {args.num_particles}")
     print(f"Simulation steps: {args.num_steps}")
     print(f"Checkpoint interval: {CHECKPOINT_INTERVAL} steps")
@@ -478,7 +485,7 @@ def run_yield_simulation(params_dict, args):
     yield_params = make_params(params_dict['params'])
 
     # Check for existing checkpoint
-    checkpoint = load_checkpoint(args.output_dir, KEY_PARAM_YIELD)
+    checkpoint = load_checkpoint(args.output_dir, args.seed)
 
     # Determine starting point
     if checkpoint:
@@ -487,7 +494,7 @@ def run_yield_simulation(params_dict, args):
         start_step = checkpoint['steps_completed']
     else:
         print("Starting new simulation...")
-        yield_key = random.PRNGKey(KEY_PARAM_YIELD)
+        yield_key = random.PRNGKey(args.seed)
         initial_body = random_IC(yield_params, yield_key)
         current_state = initial_body
         start_step = 0
@@ -496,7 +503,7 @@ def run_yield_simulation(params_dict, args):
     if start_step >= args.num_steps:
         print(f"Simulation already complete ({start_step}/{args.num_steps} steps)")
         print("Loading existing trajectory...")
-        trajectory_file = os.path.join(args.output_dir, f"trajectory_seed{KEY_PARAM_YIELD}.npz")
+        trajectory_file = os.path.join(args.output_dir, f"trajectory_seed{args.seed}.npz")
         if os.path.exists(trajectory_file):
             traj_data = np.load(trajectory_file, allow_pickle=True)
             # Use checkpoint state for final_state
@@ -517,7 +524,7 @@ def run_yield_simulation(params_dict, args):
             print(f"  Running steps {chunk_start} to {chunk_start + chunk_steps}...", flush=True)
 
             # Generate key for this chunk
-            chunk_key = random.PRNGKey(KEY_PARAM_YIELD + chunk_start)
+            chunk_key = random.PRNGKey(args.seed + chunk_start)
 
             # Run this chunk
             current_state, pos_chunk, ori_chunk = my_sim(
@@ -536,7 +543,7 @@ def run_yield_simulation(params_dict, args):
             # Save checkpoint
             save_checkpoint(
                 args.output_dir,
-                KEY_PARAM_YIELD,
+                args.seed,
                 chunk_start + chunk_steps,
                 current_state,
                 yield_params,
@@ -559,7 +566,7 @@ def run_yield_simulation(params_dict, args):
         # Save trajectory (AFTER simulation completes)
         save_trajectory(
             args.output_dir,
-            KEY_PARAM_YIELD,
+            args.seed,
             positions_history,
             orientations_history,
             step_indices,
@@ -620,7 +627,7 @@ def save_yield_results(params_dict, args, final_state, polygon_counts,
     shape_name = params_dict['shape']
     output_file = os.path.join(
         args.output_dir,
-        f"{shape_name}_yields_{timestamp}_{KEY_PARAM_YIELD}.npz"
+        f"{shape_name}_yields_{timestamp}_{args.seed}.npz"
     )
 
     box_size_yield = get_BOX_SIZE(DENSITY, args.num_particles, CENTER_RADIUS)
@@ -643,7 +650,7 @@ def save_yield_results(params_dict, args, final_state, polygon_counts,
     # Text summary
     summary_file = os.path.join(
         args.output_dir,
-        f"{shape_name}_yield_summary_{timestamp}_{KEY_PARAM_YIELD}.txt"
+        f"{shape_name}_yield_summary_{timestamp}_{args.seed}.txt"
     )
 
     with open(summary_file, 'w') as f:
