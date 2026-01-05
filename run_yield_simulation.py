@@ -140,7 +140,7 @@ def regular_ngon_reference(n, R=1.0, opening_angle_deg=100.0):
 
 def load_checkpoint(output_dir, seed):
     """
-    Load checkpoint if it exists for the given seed.
+    Load full MD checkpoint if it exists for the given seed.
 
     Parameters
     ----------
@@ -151,7 +151,7 @@ def load_checkpoint(output_dir, seed):
 
     Returns
     -------
-    dict or None : Checkpoint data if exists, None otherwise
+    dict or None : Checkpoint data with full MD state if exists, None otherwise
     """
     checkpoint_pattern = os.path.join(output_dir, f"checkpoint_seed{seed}_*.npz")
     import glob
@@ -170,15 +170,14 @@ def load_checkpoint(output_dir, seed):
         'file': checkpoint_file,
         'seed': int(checkpoint['seed']),
         'steps_completed': int(checkpoint['steps_completed']),
-        'final_state_center': checkpoint['final_state_center'],
-        'final_state_orientation': checkpoint['final_state_orientation'],
+        'full_md_state': checkpoint['full_md_state'].item(),  # Extract pickled state
         'params': checkpoint['params'],
         'num_particles': int(checkpoint['num_particles'])
     }
 
-def save_checkpoint(output_dir, seed, steps_completed, final_state, params, num_particles):
+def save_checkpoint(output_dir, seed, steps_completed, full_md_state, params, num_particles):
     """
-    Save simulation checkpoint.
+    Save full MD simulation checkpoint including velocities and thermostat state.
 
     Parameters
     ----------
@@ -188,8 +187,8 @@ def save_checkpoint(output_dir, seed, steps_completed, final_state, params, num_
         Random seed
     steps_completed : int
         Number of steps completed
-    final_state : RigidBody state
-        Current simulation state
+    full_md_state : JAX-MD NVT state
+        Complete simulation state (positions, velocities, thermostat variables)
     params : array
         Simulation parameters
     num_particles : int
@@ -202,17 +201,18 @@ def save_checkpoint(output_dir, seed, steps_completed, final_state, params, num_
         f"checkpoint_seed{seed}_step{steps_completed}.npz"
     )
 
+    # Save full state using pickle
     np.savez(
         checkpoint_file,
         seed=seed,
         steps_completed=steps_completed,
-        final_state_center=np.array(final_state.position.center),
-        final_state_orientation=np.array(final_state.position.orientation),
+        full_md_state=full_md_state,  # JAX pytree - requires allow_pickle=True
         params=params,
-        num_particles=num_particles
+        num_particles=num_particles,
+        allow_pickle=True
     )
 
-    print(f"Checkpoint saved: {checkpoint_file}")
+    print(f"Checkpoint saved: {checkpoint_file} ({steps_completed} steps)")
     return checkpoint_file
 
 def save_trajectory(output_dir, seed, positions, orientations, step_indices, params, append=False):
@@ -442,7 +442,7 @@ def count_polygons(state, params, box_size, patch_allowance=None, cluster_check=
 
 def run_yield_simulation(params_dict, args):
     """
-    Run the yield simulation.
+    Run the yield simulation with checkpointing every 100 steps.
 
     Parameters
     ----------
@@ -455,6 +455,9 @@ def run_yield_simulation(params_dict, args):
     -------
     tuple : (final_state, polygon_counts, yields)
     """
+    # Constants
+    CHECKPOINT_INTERVAL = 100  # Save checkpoint every 100 steps
+
     # Update global NUM_PARTICLES and BOX_SIZE for yield simulation
     import config_patchy_particle
     config_patchy_particle.NUM_PARTICLES = args.num_particles
@@ -463,10 +466,11 @@ def run_yield_simulation(params_dict, args):
     box_size_yield = config_patchy_particle.BOX_SIZE
 
     print(f"\n{'='*80}")
-    print(f"Yield Simulation")
+    print(f"Yield Simulation with Checkpointing")
     print(f"{'='*80}")
     print(f"Number of particles: {args.num_particles}")
     print(f"Simulation steps: {args.num_steps}")
+    print(f"Checkpoint interval: {CHECKPOINT_INTERVAL} steps")
     print(f"Box size: {box_size_yield:.2f}")
     print(f"{'='*80}\n")
 
@@ -476,117 +480,83 @@ def run_yield_simulation(params_dict, args):
     # Check for existing checkpoint
     checkpoint = load_checkpoint(args.output_dir, KEY_PARAM_YIELD)
 
+    # Determine starting point
     if checkpoint:
-        steps_completed = checkpoint['steps_completed']
-        remaining_steps = args.num_steps - steps_completed
+        print(f"Resuming from checkpoint: {checkpoint['steps_completed']} steps completed")
+        current_state = checkpoint['full_md_state']
+        start_step = checkpoint['steps_completed']
+    else:
+        print("Starting new simulation...")
+        yield_key = random.PRNGKey(KEY_PARAM_YIELD)
+        initial_body = random_IC(yield_params, yield_key)
+        current_state = initial_body
+        start_step = 0
 
-        if remaining_steps <= 0:
-            print(f"Simulation already complete ({steps_completed} steps)")
-            print("Loading existing trajectory...")
-            trajectory_file = os.path.join(args.output_dir, f"trajectory_seed{KEY_PARAM_YIELD}.npz")
-            if os.path.exists(trajectory_file):
-                traj_data = np.load(trajectory_file, allow_pickle=True)
-                positions_history = traj_data['positions']
-                orientations_history = traj_data['orientations']
-
-                # Reconstruct final state from checkpoint
-                from jax_md import rigid_body
-                final_positions = rigid_body.RigidPointUnion(
-                    jnp.array(checkpoint['final_state_center']),
-                    jnp.array(checkpoint['final_state_orientation'])
-                )
-                # Create a minimal state object
-                class FinalState:
-                    def __init__(self, position):
-                        self.position = position
-                final_state = FinalState(final_positions)
-            else:
-                raise FileNotFoundError("Checkpoint exists but trajectory file not found")
+    # Check if already complete
+    if start_step >= args.num_steps:
+        print(f"Simulation already complete ({start_step}/{args.num_steps} steps)")
+        print("Loading existing trajectory...")
+        trajectory_file = os.path.join(args.output_dir, f"trajectory_seed{KEY_PARAM_YIELD}.npz")
+        if os.path.exists(trajectory_file):
+            traj_data = np.load(trajectory_file, allow_pickle=True)
+            # Use checkpoint state for final_state
+            final_state = current_state
         else:
-            print(f"Resuming from checkpoint: {steps_completed} steps completed")
-            print(f"Running remaining {remaining_steps} steps...")
+            raise FileNotFoundError("Checkpoint exists but trajectory file not found")
+    else:
+        # Run simulation in chunks with checkpointing
+        print(f"Running simulation from step {start_step} to {args.num_steps}...")
+        print("This may take several minutes...", flush=True)
 
-            # Reconstruct initial state from checkpoint
-            from jax_md import rigid_body
-            initial_body = rigid_body.RigidBody(
-                jnp.array(checkpoint['final_state_center']),
-                jnp.array(checkpoint['final_state_orientation'])
-            )
+        positions_chunks = []
+        orientations_chunks = []
 
-            yield_key = random.PRNGKey(KEY_PARAM_YIELD + steps_completed)
+        for chunk_start in range(start_step, args.num_steps, CHECKPOINT_INTERVAL):
+            chunk_steps = min(CHECKPOINT_INTERVAL, args.num_steps - chunk_start)
 
-            # Run remaining simulation
-            final_state, positions_new, orientations_new = my_sim(
+            print(f"  Running steps {chunk_start} to {chunk_start + chunk_steps}...", flush=True)
+
+            # Generate key for this chunk
+            chunk_key = random.PRNGKey(KEY_PARAM_YIELD + chunk_start)
+
+            # Run this chunk
+            current_state, pos_chunk, ori_chunk = my_sim(
                 yield_params,
-                initial_body,
-                remaining_steps,
+                current_state,
+                chunk_steps,
                 CENTER_RADIUS,
-                yield_key,
+                chunk_key,
                 kT=kT,
             )
 
-            # Subsample to every 10 steps and save trajectory (append mode)
-            step_indices = np.arange(steps_completed, args.num_steps, 10)
-            sample_indices = (step_indices - steps_completed) // 10
-            positions_sampled = np.array(positions_new[::10])
-            orientations_sampled = np.array(orientations_new[::10])
+            # Store positions and orientations for later subsampling
+            positions_chunks.append(np.array(pos_chunk))
+            orientations_chunks.append(np.array(ori_chunk))
 
-            save_trajectory(
-                args.output_dir,
-                KEY_PARAM_YIELD,
-                positions_sampled,
-                orientations_sampled,
-                step_indices,
-                yield_params,
-                append=True
-            )
-
-            # Update checkpoint
+            # Save checkpoint
             save_checkpoint(
                 args.output_dir,
                 KEY_PARAM_YIELD,
-                args.num_steps,
-                final_state,
+                chunk_start + chunk_steps,
+                current_state,
                 yield_params,
                 args.num_particles
             )
 
-            # Load full trajectory for downstream analysis
-            trajectory_file = os.path.join(args.output_dir, f"trajectory_seed{KEY_PARAM_YIELD}.npz")
-            traj_data = np.load(trajectory_file, allow_pickle=True)
-            positions_history = traj_data['positions']
-            orientations_history = traj_data['orientations']
-
-            print("Simulation complete!")
-    else:
-        # No checkpoint - run full simulation
-        print("Generating initial condition...", flush=True)
-        yield_key = random.PRNGKey(KEY_PARAM_YIELD)
-        initial_body = random_IC(yield_params, yield_key)
-
-        # Run simulation
-        print("Running simulation...")
-        print("This may take several minutes...", flush=True)
-
-        final_state, positions_history_full, orientations_history_full = my_sim(
-            yield_params,
-            initial_body,
-            args.num_steps,
-            CENTER_RADIUS,
-            yield_key,
-            kT=kT,
-        )
-
         print("Simulation complete!")
 
-        # Subsample to every 10 steps
-        step_indices = np.arange(0, args.num_steps, 10)
-        positions_history = np.array(positions_history_full[::10])
-        orientations_history = np.array(orientations_history_full[::10])
+        # Concatenate all chunks
+        positions_full = np.concatenate(positions_chunks, axis=0)
+        orientations_full = np.concatenate(orientations_chunks, axis=0)
+
+        # Subsample to every 10 steps (POST-SIMULATION)
+        step_indices = np.arange(0, len(positions_full), 10)
+        positions_history = positions_full[::10]
+        orientations_history = orientations_full[::10]
 
         print(f"Trajectory shape: positions={positions_history.shape}, orientations={orientations_history.shape}")
 
-        # Save trajectory
+        # Save trajectory (AFTER simulation completes)
         save_trajectory(
             args.output_dir,
             KEY_PARAM_YIELD,
@@ -597,15 +567,7 @@ def run_yield_simulation(params_dict, args):
             append=False
         )
 
-        # Save checkpoint
-        save_checkpoint(
-            args.output_dir,
-            KEY_PARAM_YIELD,
-            args.num_steps,
-            final_state,
-            yield_params,
-            args.num_particles
-        )
+        final_state = current_state
 
     # Count polygons
     print("\nCounting polygons...")
