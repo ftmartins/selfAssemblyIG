@@ -17,5 +17,15 @@ cd $SLURM_SUBMIT_DIR/
 eval "$(conda shell.bash hook)"
 conda activate /home1/felipetm/.conda/envs/selfAssemblyIG
 
-python run_yield_simulation.py  --params=optimal_params/square_params_20251208_101306.npz
-python run_yield_simulation.py  --params=optimal_params/triangle_params_20251208_121534.npz
+# Run simulations with different seeds
+# You can now specify custom seeds for each simulation run
+
+# Square with seed 1273 (default)
+python run_yield_simulation.py  --params=optimal_params/square_params_20251208_101306.npz --seed=1273
+
+# Triangle with seed 1274
+python run_yield_simulation.py  --params=optimal_params/triangle_params_20251208_121534.npz --seed=1274
+
+# Example: Run with different seeds for reproducibility testing
+# python run_yield_simulation.py  --params=optimal_params/square_params_20251208_101306.npz --seed=2000
+# python run_yield_simulation.py  --params=optimal_params/square_params_20251208_101306.npz --seed=3000
