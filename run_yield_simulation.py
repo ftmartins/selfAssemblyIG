@@ -503,21 +503,23 @@ def run_yield_simulation(params_dict, args):
     -------
     tuple : (final_state, polygon_counts, yields)
     """
-    # Constants
+
+
+    # --- New logic: Equilibration run before main simulation, but skip if main already done ---
     CHECKPOINT_INTERVAL = 1000  # Save checkpoint every 1000 steps
 
     # Update global NUM_PARTICLES and BOX_SIZE for yield simulation
     import config_patchy_particle
     config_patchy_particle.NUM_PARTICLES = args.num_particles
     config_patchy_particle.BOX_SIZE = get_BOX_SIZE(DENSITY, args.num_particles, CENTER_RADIUS)
-
     box_size_yield = config_patchy_particle.BOX_SIZE
 
     print(f"\n{'='*80}")
-    print(f"Yield Simulation with Checkpointing")
+    print(f"Yield Simulation with Equilibration and Checkpointing")
     print(f"{'='*80}")
     print(f"Random seed: {args.seed}")
     print(f"Number of particles: {args.num_particles}")
+    print(f"Equilibration steps: {EQUILIBRATION_STEPS}")
     print(f"Simulation steps: {args.num_steps}")
     print(f"Checkpoint interval: {CHECKPOINT_INTERVAL} steps")
     print(f"Box size: {box_size_yield:.2f}")
@@ -526,63 +528,117 @@ def run_yield_simulation(params_dict, args):
     # Prepare parameters
     yield_params = make_params(params_dict['params'])
 
-    # Check for existing checkpoint
+    # --- Main simulation checkpointing: check if already complete ---
     checkpoint = load_checkpoint(args.output_dir, args.seed, param_id=params_dict.get('param_id'))
-
-    # Determine starting point
+    main_sim_done = False
     if checkpoint:
-        print(f"Resuming from checkpoint: {checkpoint['steps_completed']} steps completed")
-        full_md_state_checkpoint = checkpoint['full_md_state']
-        current_state = full_md_state_checkpoint.position  # Extract position for next my_sim call
-        start_step = checkpoint['steps_completed']
+        if checkpoint['steps_completed'] >= args.num_steps:
+            main_sim_done = True
     else:
-        print("Starting new simulation...")
-        yield_key = random.PRNGKey(args.seed)
-        initial_body = random_IC(yield_params, yield_key)
-        current_state = initial_body
+        # Also check for trajectory file
+        param_id = params_dict.get('param_id')
+        if param_id:
+            trajectory_file = os.path.join(args.output_dir, param_id, f"seed{args.seed}", "trajectory.npz")
+            if not os.path.exists(trajectory_file):
+                trajectory_file = os.path.join(args.output_dir, f"trajectory_{param_id}_seed{args.seed}.npz")
+            if not os.path.exists(trajectory_file):
+                trajectory_file = os.path.join(args.output_dir, f"trajectory_seed{args.seed}.npz")
+        else:
+            trajectory_file = os.path.join(args.output_dir, f"trajectory_seed{args.seed}.npz")
+        if os.path.exists(trajectory_file):
+            main_sim_done = True
+
+    # --- Equilibration checkpointing: only run if main simulation not done ---
+    if not main_sim_done:
+        equil_checkpoint = load_checkpoint(args.output_dir, f"{args.seed}_eq", param_id=params_dict.get('param_id'))
+        if equil_checkpoint:
+            print(f"Resuming equilibration: {equil_checkpoint['steps_completed']} steps completed")
+            eq_full_md_state = equil_checkpoint['full_md_state']
+            eq_current_state = eq_full_md_state.position
+            eq_start_step = equil_checkpoint['steps_completed']
+        else:
+            print("Starting new equilibration run...")
+            yield_key = random.PRNGKey(args.seed)
+            initial_body = random_IC(yield_params, yield_key)
+            eq_current_state = initial_body
+            eq_start_step = 0
+
+        # Run equilibration if not finished
+        if eq_start_step < EQUILIBRATION_STEPS:
+            print(f"Equilibration: running from step {eq_start_step} to {EQUILIBRATION_STEPS}")
+            for chunk_start in range(eq_start_step, EQUILIBRATION_STEPS, CHECKPOINT_INTERVAL):
+                chunk_steps = min(CHECKPOINT_INTERVAL, EQUILIBRATION_STEPS - chunk_start)
+                chunk_key = random.PRNGKey(args.seed + chunk_start)
+                eq_full_md_state, _, _ = my_sim(
+                    yield_params,
+                    eq_current_state,
+                    chunk_steps,
+                    CENTER_RADIUS,
+                    chunk_key,
+                    kT=kT,
+                )
+                save_checkpoint(
+                    args.output_dir,
+                    f"{args.seed}_eq",
+                    chunk_start + chunk_steps,
+                    eq_full_md_state,
+                    yield_params,
+                    args.num_particles,
+                    param_id=params_dict.get('param_id')
+                )
+                eq_current_state = eq_full_md_state.position
+            print("Equilibration complete!")
+        else:
+            print("Equilibration already complete.")
+
+    # --- Main simulation checkpointing ---
+    if checkpoint:
+        print(f"Resuming main simulation: {checkpoint['steps_completed']} steps completed")
+        full_md_state_checkpoint = checkpoint['full_md_state']
+        current_state = full_md_state_checkpoint.position
+        start_step = checkpoint['steps_completed']
+    elif not main_sim_done:
+        print("Starting main simulation from post-equilibration state...")
+        # If we just ran equilibration, eq_current_state is defined
+        # If not, load from equilibration checkpoint
+        if 'eq_current_state' not in locals():
+            equil_checkpoint = load_checkpoint(args.output_dir, f"{args.seed}_eq", param_id=params_dict.get('param_id'))
+            if equil_checkpoint:
+                eq_full_md_state = equil_checkpoint['full_md_state']
+                eq_current_state = eq_full_md_state.position
+            else:
+                yield_key = random.PRNGKey(args.seed)
+                eq_current_state = random_IC(yield_params, yield_key)
+        current_state = eq_current_state
         start_step = 0
 
     # Check if already complete
     if start_step >= args.num_steps:
         print(f"Simulation already complete ({start_step}/{args.num_steps} steps)")
         print("Loading existing trajectory...")
-
-        # Try new directory structure first, fall back to old
         param_id = params_dict.get('param_id')
         if param_id:
-            # New structure: output_dir/{param_id}/seed{seed}/trajectory.npz
             trajectory_file = os.path.join(args.output_dir, param_id, f"seed{args.seed}", "trajectory.npz")
             if not os.path.exists(trajectory_file):
-                # Old flat naming
                 trajectory_file = os.path.join(args.output_dir, f"trajectory_{param_id}_seed{args.seed}.npz")
             if not os.path.exists(trajectory_file):
                 trajectory_file = os.path.join(args.output_dir, f"trajectory_seed{args.seed}.npz")
         else:
             trajectory_file = os.path.join(args.output_dir, f"trajectory_seed{args.seed}.npz")
-
         if os.path.exists(trajectory_file):
             traj_data = np.load(trajectory_file, allow_pickle=True)
-            # Use checkpoint state for final_state
             final_state = full_md_state_checkpoint
         else:
             raise FileNotFoundError("Checkpoint exists but trajectory file not found")
     else:
-        # Run simulation in chunks with checkpointing
-        print(f"Running simulation from step {start_step} to {args.num_steps}...")
+        print(f"Running main simulation from step {start_step} to {args.num_steps}...")
         print("This may take several minutes...", flush=True)
-
         positions_chunks = []
         orientations_chunks = []
-
         for chunk_start in range(start_step, args.num_steps, CHECKPOINT_INTERVAL):
             chunk_steps = min(CHECKPOINT_INTERVAL, args.num_steps - chunk_start)
-
             print(f"  Running steps {chunk_start} to {chunk_start + chunk_steps}...", flush=True)
-
-            # Generate key for this chunk
             chunk_key = random.PRNGKey(args.seed + chunk_start)
-
-            # Run this chunk
             full_md_state, pos_chunk, ori_chunk = my_sim(
                 yield_params,
                 current_state,
@@ -591,12 +647,8 @@ def run_yield_simulation(params_dict, args):
                 chunk_key,
                 kT=kT,
             )
-
-            # Store positions and orientations for later subsampling
             positions_chunks.append(np.array(pos_chunk))
             orientations_chunks.append(np.array(ori_chunk))
-
-            # Save checkpoint with full MD state
             save_checkpoint(
                 args.output_dir,
                 args.seed,
@@ -606,27 +658,15 @@ def run_yield_simulation(params_dict, args):
                 args.num_particles,
                 param_id=params_dict.get('param_id')
             )
-
-            # Update current_state with the position for next iteration
             current_state = full_md_state.position
-
-        print("Simulation complete!")
-
-        # Store final state (the last full MD state from the loop)
+        print("Main simulation complete!")
         final_state = full_md_state
-
-        # Concatenate all chunks
         positions_full = np.concatenate(positions_chunks, axis=0)
         orientations_full = np.concatenate(orientations_chunks, axis=0)
-
-        # Subsample to every 10 steps (POST-SIMULATION)
         step_indices = np.arange(0, len(positions_full), 10)
         positions_history = positions_full[::10]
         orientations_history = orientations_full[::10]
-
         print(f"Trajectory shape: positions={positions_history.shape}, orientations={orientations_history.shape}")
-
-        # Save trajectory (AFTER simulation completes)
         save_trajectory(
             args.output_dir,
             args.seed,

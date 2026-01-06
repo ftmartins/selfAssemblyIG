@@ -44,10 +44,14 @@ R_CUTOFF = PATCH_SIZE
 kT = 1.0
 
 # ============================================================================
+
 # OPTIMIZATION PARAMETERS
 # ============================================================================
 
+# Number of steps for main simulation
 NUM_STEPS = 40000  # Full simulation steps
+# Number of steps for equilibration (run before main simulation)
+EQUILIBRATION_STEPS = 2_000_000  # Set as needed for your system
 NUM_STEPS_TO_OPT = 1000  # Steps during optimization
 SQRT_NUM_STEPS_TO_OPT = int(np.sqrt(NUM_STEPS_TO_OPT))
 QUICK_STEPS = int(np.sqrt((NUM_STEPS - NUM_STEPS_TO_OPT)))
