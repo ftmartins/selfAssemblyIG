@@ -504,7 +504,7 @@ def run_yield_simulation(params_dict, args):
     tuple : (final_state, polygon_counts, yields)
     """
     # Constants
-    CHECKPOINT_INTERVAL = 1000  # Save checkpoint every 1000 steps
+    CHECKPOINT_INTERVAL = 10_000  # Save checkpoint every 1000 steps
 
     # Update global NUM_PARTICLES and BOX_SIZE for yield simulation
     import config_patchy_particle
