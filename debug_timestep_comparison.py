@@ -85,19 +85,19 @@ def energy_matrix(eng):
 
 def thetas_to_shape(thetas, radius=CENTER_RADIUS):
     """Convert patch angles to rigid body shape."""
-    positions = []
-    positions += [jnp.array([0.0, 0.0])]
-    for theta in thetas:
-        positions += [jnp.array([jnp.cos(theta), jnp.sin(theta)]) * radius]
-    positions = jnp.array(positions)
+    patch_positions = jnp.zeros((len(thetas), 2), dtype=jnp.float64)
+    patch_positions = patch_positions.at[:, 0].set(radius * jnp.cos(thetas))
+    patch_positions = patch_positions.at[:, 1].set(radius * jnp.sin(thetas))
+    positions = jnp.concatenate((jnp.array([[0.0, 0.0]]), patch_positions), axis=0)
 
-    masses = []
-    masses += [CENTER_MASS]
-    for _ in thetas:
-        masses += [PATCH_MASS]
-    masses = jnp.array(masses)
+    species = jnp.arange(len(thetas) + 1)
+    species = jnp.array(species, dtype=jnp.int32)
 
-    return rigid_body.RigidBody(positions, masses)
+    patch_mass = PATCH_MASS * jnp.ones(len(thetas))
+    mass = jnp.concatenate((jnp.array([CENTER_MASS]), patch_mass), axis=0)
+
+    shape = rigid_body.point_union_shape(positions, mass).set(point_species=species)
+    return shape
 
 def run_sim_custom_dt(thetas_and_energy,
                       x0,
