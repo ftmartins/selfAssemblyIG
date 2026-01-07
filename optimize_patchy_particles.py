@@ -86,7 +86,7 @@ def initialize_parameters(args, key):
 
 def run_optimization_stage(stage_num, stage_name, params, key, args,
                           learning_rate, steps, tracker, cmd='w',
-                          myoptsteps=1):
+                          myoptsteps=1, shape_name=None):
     """
     Run a single optimization stage.
 
@@ -137,6 +137,7 @@ def run_optimization_stage(stage_num, stage_name, params, key, args,
         cmd=cmd,
         myoptsteps=myoptsteps,
         optimizer=OPTIMIZER,
+        cl_type=shape_name,
     )
 
     print(f"\nStage {stage_num} Results:")
@@ -276,7 +277,8 @@ def main():
         steps=OPT_STAGE_STEPS[0],
         tracker="stage1",
         cmd='w',
-        myoptsteps=myoptsteps
+        myoptsteps=myoptsteps,
+        shape_name=shape_name
     )
     stage_results.append(results1)
     opt_params = results1[3]  # cluster_params
@@ -289,7 +291,8 @@ def main():
         steps=OPT_STAGE_STEPS[1],
         tracker="stage2",
         cmd='a',
-        myoptsteps=myoptsteps
+        myoptsteps=myoptsteps,
+        shape_name=shape_name
     )
     stage_results.append(results2)
     opt_params = results2[3]  # cluster_params
@@ -302,7 +305,8 @@ def main():
         steps=OPT_STAGE_STEPS[2],
         tracker="stage3",
         cmd='a',
-        myoptsteps=myoptsteps
+        myoptsteps=myoptsteps,
+        shape_name=shape_name
     )
     stage_results.append(results3)
     optimized_params = results3[3]  # cluster_params (final)
