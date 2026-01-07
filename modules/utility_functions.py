@@ -111,6 +111,116 @@ def random_IC(thetas_and_energy, key):
   return body
 v_random_IC = vmap(random_IC, (None, 0))
 
+def random_IC_nonoverlap(thetas_and_energy, key, min_distance=None, max_attempts=10000):
+  """
+  Generate non-overlapping initial particle configuration using Random Sequential Addition (RSA).
+
+  Places particles one at a time, rejecting positions that overlap with existing particles.
+  Uses periodic boundary conditions to correctly calculate distances.
+
+  Parameters
+  ----------
+  thetas_and_energy : array
+      Particle parameters (patch angles + energies)
+  key : PRNGKey
+      JAX random key for reproducibility
+  min_distance : float, optional
+      Minimum center-to-center distance between particles.
+      Default: 2*CENTER_RADIUS + 2*PATCH_SIZE
+  max_attempts : int, optional
+      Maximum attempts to place each particle before raising error.
+      Default: 10000 (very conservative for density=0.1)
+
+  Returns
+  -------
+  RigidBody : Initial configuration with non-overlapping particles
+
+  Raises
+  ------
+  RuntimeError : If unable to place all particles without overlap after max_attempts
+
+  Notes
+  -----
+  - RSA algorithm is standard for hard-sphere systems
+  - Works well for area fraction < 0.3 (we typically use 0.1)
+  - At density=0.1, typically succeeds in 10-100 attempts per particle
+  - Uses Python loops (not JIT-compiled) due to variable iteration count
+  """
+  import config_patchy_particle
+
+  # Access configuration at runtime
+  num_particles = config_patchy_particle.NUM_PARTICLES
+  box_size = config_patchy_particle.BOX_SIZE
+
+  # Calculate default minimum distance if not provided
+  if min_distance is None:
+    min_distance = 2 * CENTER_RADIUS + 2 * PATCH_SIZE
+
+  # Setup periodic boundary conditions
+  displacement_fn, shift = space.periodic(box_size)
+
+  # Split keys for position and angle generation
+  key, pos_key, angle_key = random.split(key, 3)
+
+  # Initialize list to store accepted positions
+  positions = []
+
+  print(f"Generating {num_particles} non-overlapping particles...")
+  print(f"  Box size: {box_size:.2f}")
+  print(f"  Min distance: {min_distance:.3f}")
+  print(f"  Density: {np.pi * CENTER_RADIUS**2 * num_particles / box_size**2:.3f}")
+
+  # RSA algorithm: place particles one at a time
+  for i in range(num_particles):
+    placed = False
+    attempts = 0
+
+    # Keep trying until we find a non-overlapping position
+    while not placed and attempts < max_attempts:
+      # Generate random candidate position
+      pos_key, subkey = random.split(pos_key)
+      candidate_pos = box_size * random.uniform(subkey, (2,), dtype=jnp.float64)
+
+      # Check if candidate overlaps with any existing particle
+      overlap = False
+      for existing_pos in positions:
+        # Calculate minimum image distance with periodic boundaries
+        dr = displacement_fn(candidate_pos, existing_pos)
+        distance = jnp.sqrt(jnp.sum(dr**2))
+
+        if distance < min_distance:
+          overlap = True
+          break
+
+      # Accept position if no overlap
+      if not overlap:
+        positions.append(candidate_pos)
+        placed = True
+        if (i + 1) % 10 == 0:
+          print(f"  Placed {i+1}/{num_particles} particles (attempts for this particle: {attempts+1})")
+
+      attempts += 1
+
+    # Raise error if we couldn't place the particle
+    if not placed:
+      raise RuntimeError(
+        f"Failed to place particle {i+1}/{num_particles} after {max_attempts} attempts. "
+        f"Density may be too high or min_distance too large. "
+        f"Try reducing min_distance or increasing box_size."
+      )
+
+  print(f"  Successfully placed all {num_particles} particles!")
+
+  # Convert positions list to JAX array
+  R = jnp.array(positions, dtype=jnp.float64)
+
+  # Generate random orientations (same as original random_IC)
+  angles = random.uniform(angle_key, (len(R),), dtype=jnp.float64) * jnp.pi * 2
+
+  # Create and return RigidBody
+  body = rigid_body.RigidBody(R, angles)
+  return body
+
 def run_sim(thetas_and_energy,
             x0,
             num_steps,

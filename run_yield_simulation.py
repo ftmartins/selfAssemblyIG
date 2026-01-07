@@ -27,7 +27,7 @@ import freud
 from config_patchy_particle import *
 
 # Import core modules
-from modules.utility_functions import my_sim, make_params, random_IC
+from modules.utility_functions import my_sim, make_params, random_IC, random_IC_nonoverlap
 
 def parse_arguments():
     """Parse command-line arguments."""
@@ -559,7 +559,7 @@ def run_yield_simulation(params_dict, args):
         else:
             print("Starting new equilibration run...")
             yield_key = random.PRNGKey(args.seed)
-            initial_body = random_IC(yield_params, yield_key)
+            initial_body = random_IC_nonoverlap(yield_params, yield_key)
             eq_current_state = initial_body
             eq_start_step = 0
 
@@ -608,7 +608,7 @@ def run_yield_simulation(params_dict, args):
                 eq_current_state = eq_full_md_state.position
             else:
                 yield_key = random.PRNGKey(args.seed)
-                eq_current_state = random_IC(yield_params, yield_key)
+                eq_current_state = random_IC_nonoverlap(yield_params, yield_key)
         current_state = eq_current_state
         start_step = 0
 
