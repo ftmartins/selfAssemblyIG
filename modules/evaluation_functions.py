@@ -77,7 +77,9 @@ def loc_loss(R, ref_shape = REF_SHAPE):
       endloss = jnp.sum(nearest_nbrs_match_ref_dist) 
       return endloss
 patch_allowance= PATCH_SIZE*2/3.
-def print_loc_loss(state, ref_shape = shape_ID):
+def print_loc_loss(state, ref_shape=None):
+    if ref_shape is None:
+        ref_shape = shape_ID
     loss = loc_loss(state.center,get_shape(ref_shape))
     return loss
 def patch_dist(angle_rad, radius = CENTER_RADIUS):
@@ -85,7 +87,9 @@ def patch_dist(angle_rad, radius = CENTER_RADIUS):
     distance = 2 * radius * np.sin(angle_rad / 2.)
     
     return distance
-def get_clusters(state, params, cl_type=shape_ID, allowance=patch_allowance, cluster_check = .5, print_patch=False, mismatch = False):
+def get_clusters(state, params, cl_type=None, allowance=patch_allowance, cluster_check=.5, print_patch=False, mismatch=False):
+    if cl_type is None:
+        cl_type = shape_ID
     center_pos, patches_pos = body_to_plot(state, params[:NUM_PATCHES])
     patch_dists = abs(patch_dist(params[1]))
 
@@ -159,11 +163,14 @@ def get_clusters(state, params, cl_type=shape_ID, allowance=patch_allowance, clu
     glow_list = [list(row) for row in final_matches]
     return len(final_matches), final_matches, glow_list
 
-def make_cluster_list(state, params,batch_size = BATCH_SIZE):
+def make_cluster_list(state, params, batch_size=BATCH_SIZE, cl_type=None):
+    if cl_type is None:
+        cl_type = shape_ID
+
     squares = np.zeros(batch_size)
 
     for i in range(batch_size):
-        ksquares,_,_ = get_clusters(state[i], params)
+        ksquares, _, _ = get_clusters(state[i], params, cl_type=cl_type)
 
         squares[i] = ksquares
     return squares    
