@@ -106,13 +106,14 @@ def optimize(input_params,
              opt_steps,
              batch_size,
              loop_batch,
-             save_every, 
+             save_every,
              tracker,
              learning_rate=0.5,
              cmd='w',
-             myoptsteps = 1, 
+             myoptsteps = 1,
              optimizer = OPTIMIZER,
-             last_step = 0):
+             last_step = 0,
+             cl_type=None):
   
   startopttime = time.time()
   learning_rate_schedule = jnp.ones(opt_steps)*learning_rate
@@ -137,12 +138,13 @@ def optimize(input_params,
   def clip_gradient(g, clip=CLIP):
     return jnp.array(jnp.where(jnp.abs(g) > clip, jnp.sign(g)*clip, g))
   ##########################################################################################################
-  def step(stepk, 
+  def step(stepk,
           opt_state,
           key,
           batch_size=10,
           save_every=10,
-          cmd='w'):
+          cmd='w',
+          cl_type=None):
     bprint(f" Opt State :{opt_state}")
     opt_params = get_params(opt_state)
     run_params = make_params(opt_params)   
@@ -173,7 +175,7 @@ def optimize(input_params,
 
     loss = ls / loop_batch
     position,_,_= run_sim_and_get_positions(run_params, initial_positions, simulation_keys)
-    batch_shapes = make_cluster_list(position,run_params)
+    batch_shapes = make_cluster_list(position, run_params, batch_size=batch_size, cl_type=cl_type)
     step_shapes = np.sum(batch_shapes)
     g_out = g
 
@@ -223,7 +225,8 @@ def optimize(input_params,
                                  split,
                                  batch_size=batch_size,
                                  save_every=save_every,
-                                 cmd=cmd)
+                                 cmd=cmd,
+                                 cl_type=cl_type)
       inittimefin = int(time.time()-startopttime)
       bprint(f"First step took {inittimefin} seconds to complete.")
       print(f"Step 1/{opt_steps} | Loss: {loss:.6f} | Time: {inittimefin}s")
@@ -235,7 +238,8 @@ def optimize(input_params,
                                  split,
                                  batch_size=batch_size,
                                  save_every=save_every,
-                                 cmd=cmd)
+                                 cmd=cmd,
+                                 cl_type=cl_type)
       steptimefin = int(time.time()-steptime+1)
       bprint(f"Second step took {steptimefin} seconds to complete.")
       full_opt_time = (inittimefin + steptimefin * (opt_steps-1)) //60
@@ -249,7 +253,8 @@ def optimize(input_params,
                                  split,
                                  batch_size=batch_size,
                                  save_every=save_every,
-                                 cmd=cmd)
+                                 cmd=cmd,
+                                 cl_type=cl_type)
       steptimefin = int(time.time()-steptime)
       bprint(f"Optimization step {i+1} took {steptimefin} seconds to complete.")
       if (i + 1) % save_every == 0:
