@@ -29,6 +29,158 @@ from config_patchy_particle import *
 # Import core modules
 from modules.utility_functions import my_sim, make_params, random_IC, random_IC_nonoverlap
 
+def load_initial_condition(num_particles, seed, density=0.1, output_dir='initial_conditions',
+                          tolerance_box_size=1e-4, tolerance_min_distance=1e-4):
+    """
+    Load pre-generated initial condition from cache.
+
+    This function loads a cached IC file and performs strict validation to ensure
+    compatibility with the current simulation parameters.
+
+    Parameters
+    ----------
+    num_particles : int
+        Expected number of particles
+    seed : int
+        Random seed used to generate the IC
+    density : float, optional
+        Expected density/area fraction (default: 0.1)
+    output_dir : str, optional
+        Directory containing IC files (default: 'initial_conditions')
+    tolerance_box_size : float, optional
+        Relative tolerance for box_size matching (default: 1e-4)
+    tolerance_min_distance : float, optional
+        Relative tolerance for min_distance matching (default: 1e-4)
+
+    Returns
+    -------
+    RigidBody or None
+        Loaded RigidBody if successful, None if not found or validation fails
+
+    Validation Checks
+    -----------------
+    1. File exists and is readable
+    2. num_particles matches exactly
+    3. density matches exactly
+    4. box_size matches within tolerance
+    5. min_distance matches within tolerance
+    6. Positions and orientations have correct shapes
+    7. No NaN or Inf values in arrays
+
+    Examples
+    --------
+    >>> # Try loading IC, fall back to generation
+    >>> ic = load_initial_condition(1000, seed=42, density=0.1)
+    >>> if ic is None:
+    >>>     ic = random_IC_nonoverlap(params, random.PRNGKey(42))
+    """
+    from jax_md import rigid_body
+
+    # Compute expected parameters using same formulas as generation
+    expected_box_size = get_BOX_SIZE(density, num_particles, CENTER_RADIUS)
+    expected_min_distance = 2 * CENTER_RADIUS + 2 * PATCH_SIZE
+
+    # Construct filename
+    ic_filename = f"ic_N{num_particles}_rho{density:.4f}_seed{seed}.npz"
+    ic_path = os.path.join(output_dir, ic_filename)
+
+    # Check if file exists
+    if not os.path.exists(ic_path):
+        print(f"No cached IC found: {ic_path}")
+        return None
+
+    try:
+        print(f"Loading cached IC: {ic_path}")
+
+        # Load NPZ file
+        data = np.load(ic_path)
+
+        # Extract metadata
+        saved_seed = int(data['seed'])
+        saved_num_particles = int(data['num_particles'])
+        saved_density = float(data['density'])
+        saved_box_size = float(data['box_size'])
+        saved_min_distance = float(data['min_distance'])
+
+        # Extract IC arrays
+        positions = data['positions']
+        orientations = data['orientations']
+
+        # Validation: Exact matches
+        if saved_num_particles != num_particles:
+            print(f"  VALIDATION FAILED: num_particles mismatch")
+            print(f"    Expected: {num_particles}, Found: {saved_num_particles}")
+            return None
+
+        if saved_seed != seed:
+            print(f"  WARNING: seed mismatch (expected {seed}, found {saved_seed})")
+            # Not a hard failure, but unusual
+
+        if not np.isclose(saved_density, density, rtol=1e-10):
+            print(f"  VALIDATION FAILED: density mismatch")
+            print(f"    Expected: {density:.6f}, Found: {saved_density:.6f}")
+            return None
+
+        # Validation: Box size with tolerance
+        box_size_error = abs(saved_box_size - expected_box_size) / expected_box_size
+        if box_size_error > tolerance_box_size:
+            print(f"  VALIDATION FAILED: box_size mismatch")
+            print(f"    Expected: {expected_box_size:.6f}")
+            print(f"    Found:    {saved_box_size:.6f}")
+            print(f"    Error:    {box_size_error:.2e} (tolerance: {tolerance_box_size:.2e})")
+            return None
+
+        # Validation: Min distance with tolerance
+        min_distance_error = abs(saved_min_distance - expected_min_distance) / expected_min_distance
+        if min_distance_error > tolerance_min_distance:
+            print(f"  VALIDATION FAILED: min_distance mismatch")
+            print(f"    Expected: {expected_min_distance:.6f}")
+            print(f"    Found:    {saved_min_distance:.6f}")
+            print(f"    Error:    {min_distance_error:.2e} (tolerance: {tolerance_min_distance:.2e})")
+            return None
+
+        # Validation: Array shapes
+        if positions.shape != (num_particles, 2):
+            print(f"  VALIDATION FAILED: positions shape mismatch")
+            print(f"    Expected: ({num_particles}, 2), Found: {positions.shape}")
+            return None
+
+        if orientations.shape != (num_particles,):
+            print(f"  VALIDATION FAILED: orientations shape mismatch")
+            print(f"    Expected: ({num_particles},), Found: {orientations.shape}")
+            return None
+
+        # Validation: No NaN or Inf
+        if np.any(np.isnan(positions)) or np.any(np.isinf(positions)):
+            print(f"  VALIDATION FAILED: positions contain NaN or Inf")
+            return None
+
+        if np.any(np.isnan(orientations)) or np.any(np.isinf(orientations)):
+            print(f"  VALIDATION FAILED: orientations contain NaN or Inf")
+            return None
+
+        # All validations passed - reconstruct RigidBody
+        print(f"  Validation PASSED")
+        print(f"    Particles: {num_particles}")
+        print(f"    Density:   {saved_density:.4f}")
+        print(f"    Box size:  {saved_box_size:.4f}")
+        print(f"    Seed:      {saved_seed}")
+
+        # Convert to JAX arrays and create RigidBody
+        positions_jax = jnp.array(positions, dtype=jnp.float64)
+        orientations_jax = jnp.array(orientations, dtype=jnp.float64)
+
+        body = rigid_body.RigidBody(positions_jax, orientations_jax)
+
+        print(f"  IC loaded successfully!")
+        return body
+
+    except Exception as e:
+        print(f"  ERROR loading IC: {e}")
+        import traceback
+        traceback.print_exc()
+        return None
+
 def parse_arguments():
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser(
@@ -558,8 +710,25 @@ def run_yield_simulation(params_dict, args):
             eq_start_step = equil_checkpoint['steps_completed']
         else:
             print("Starting new equilibration run...")
-            yield_key = random.PRNGKey(args.seed)
-            initial_body = random_IC_nonoverlap(yield_params, yield_key)
+
+            # Try to load cached IC first
+            cached_ic = load_initial_condition(
+                num_particles=args.num_particles,
+                seed=args.seed,
+                density=DENSITY,
+                output_dir='initial_conditions'
+            )
+
+            if cached_ic is not None:
+                # Use cached IC
+                print("Using cached initial condition")
+                initial_body = cached_ic
+            else:
+                # Fall back to generating IC
+                print("Generating new initial condition...")
+                yield_key = random.PRNGKey(args.seed)
+                initial_body = random_IC_nonoverlap(yield_params, yield_key)
+
             eq_current_state = initial_body
             eq_start_step = 0
 
