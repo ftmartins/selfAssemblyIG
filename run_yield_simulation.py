@@ -27,7 +27,7 @@ import freud
 from config_patchy_particle import *
 
 # Import core modules
-from modules.utility_functions import my_sim, make_params, random_IC
+from modules.utility_functions import my_sim, make_params, random_IC, random_IC_nonoverlap
 
 def parse_arguments():
     """Parse command-line arguments."""
@@ -199,7 +199,7 @@ def load_checkpoint(output_dir, seed, param_id=None):
 
     return {
         'file': checkpoint_file,
-        'seed': int(checkpoint['seed']),
+        'seed': int(str(checkpoint['seed']).split('_eq')[0]),
         'steps_completed': int(checkpoint['steps_completed']),
         'full_md_state': checkpoint['full_md_state'].item(),  # Extract pickled state
         'params': checkpoint['params'],
@@ -557,7 +557,7 @@ def run_yield_simulation(params_dict, args):
         else:
             print("Starting new equilibration run...")
             yield_key = random.PRNGKey(args.seed)
-            initial_body = random_IC(yield_params, yield_key)
+            initial_body = random_IC_nonoverlap(yield_params, yield_key)
             eq_current_state = initial_body
             eq_start_step = 0
 
@@ -606,7 +606,7 @@ def run_yield_simulation(params_dict, args):
                 eq_current_state = eq_full_md_state.position
             else:
                 yield_key = random.PRNGKey(args.seed)
-                eq_current_state = random_IC(yield_params, yield_key)
+                eq_current_state = random_IC_nonoverlap(yield_params, yield_key)
         current_state = eq_current_state
         start_step = 0
 
@@ -657,14 +657,14 @@ def run_yield_simulation(params_dict, args):
                 param_id=params_dict.get('param_id')
             )
             current_state = full_md_state.position
-        print("Main simulation complete!")
+        print("Main simulation complete!", flush=True)
         final_state = full_md_state
         positions_full = np.concatenate(positions_chunks, axis=0)
         orientations_full = np.concatenate(orientations_chunks, axis=0)
         step_indices = np.arange(0, len(positions_full), 10)
         positions_history = positions_full[::10]
         orientations_history = orientations_full[::10]
-        print(f"Trajectory shape: positions={positions_history.shape}, orientations={orientations_history.shape}")
+        print(f"Trajectory shape: positions={positions_history.shape}, orientations={orientations_history.shape}", flush=True)
         save_trajectory(
             args.output_dir,
             args.seed,
@@ -826,3 +826,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+equil_checkpoint
