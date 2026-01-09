@@ -34,29 +34,68 @@ def get_desired_dists(ref_shape):
 ref_dists = get_desired_dists(REF_SHAPE)
 
 @jit
-def sys_loss(R):
+def sys_loss(R, ref_shape=None):
+    """
+    Calculate system loss based on distance matching to reference shape.
+
+    Parameters
+    ----------
+    R : array
+        Particle positions
+    ref_shape : array, optional
+        Reference shape positions. If None, uses global REF_SHAPE.
+
+    Returns
+    -------
+    float : Loss value
+    """
+    # Use global if not provided
+    if ref_shape is None:
+        ref_shape = REF_SHAPE
+        ref_shape_size = REF_SHAPE_SIZE
+        ref_dists_local = ref_dists
+    else:
+        ref_shape_size = len(ref_shape)
+        ref_dists_local = get_desired_dists(ref_shape)
+
     displacement, shift = space.periodic(BOX_SIZE)
     #Location Loss
     vdisp = space.map_product(displacement)
     ds = jnp.sort(space.distance(vdisp(R, R)))
     subtract = lambda R, Rref: R - Rref
     v_subtract = space.map_product(subtract)
-    diffs = v_subtract(ds[:, :len(REF_SHAPE)], ref_dists)
+    diffs = v_subtract(ds[:, :ref_shape_size], ref_dists_local)
     nearest_nbrs_match_ref_dist = jnp.min(jnp.linalg.norm(diffs, axis=-1), axis=0)
-      
+
     #Combine Losses
-    if NUM_PARTICLES > REF_SHAPE_SIZE: 
-      other_nbrs_far = ds[:, REF_SHAPE_SIZE:CLOSENESS_PENALTY_NEIGHBORS + REF_SHAPE_SIZE]
+    if NUM_PARTICLES > ref_shape_size:
+      other_nbrs_far = ds[:, ref_shape_size:CLOSENESS_PENALTY_NEIGHBORS + ref_shape_size]
       endloss = jnp.sum(nearest_nbrs_match_ref_dist) - CLOSENESS_PENALTY * jnp.mean(other_nbrs_far)
-    
-    elif NUM_PARTICLES == REF_SHAPE_SIZE:
-      endloss = jnp.sum(nearest_nbrs_match_ref_dist) 
+
+    elif NUM_PARTICLES == ref_shape_size:
+      endloss = jnp.sum(nearest_nbrs_match_ref_dist)
     return endloss
 
-v_loss = vmap(sys_loss)
+# Create vmap version that maps over R_batched but keeps ref_shape fixed
+v_loss = vmap(sys_loss, in_axes=(0, None))
+
 @jit
-def avg_loss(R_batched):
-    losses = v_loss(R_batched)
+def avg_loss(R_batched, ref_shape=None):
+    """
+    Calculate average loss over batch.
+
+    Parameters
+    ----------
+    R_batched : array
+        Batch of particle positions
+    ref_shape : array, optional
+        Reference shape positions. If None, uses global REF_SHAPE.
+
+    Returns
+    -------
+    float : Average loss value
+    """
+    losses = v_loss(R_batched, ref_shape)
     return jnp.mean(losses)
   
 @jit
