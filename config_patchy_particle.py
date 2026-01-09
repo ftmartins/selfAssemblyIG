@@ -135,7 +135,75 @@ SHAPE_CONFIGS = {
 }
 
 # Helper function to get reference shape
-def get_shape(shape_id=None):
+def regular_ngon_reference(n, R=1.0, opening_angle_rad=None):
+    """
+    Construct a reference configuration for an n-gon of 2D patchy particles.
+
+    Parameters
+    ----------
+    n : int
+        Number of sides (must be >= 3)
+    R : float
+        Circumradius of the polygon
+    opening_angle_rad : float, optional
+        Opening angle in radians. If None, uses a default of ~1.75 rad (100°)
+
+    Returns
+    -------
+    tuple : (positions, orientations, patch_angles)
+        - positions: (n, 2) array of particle positions
+        - orientations: (n,) array of particle orientations
+        - patch_angles: (n, 2) array of patch angles relative to body frame
+    """
+    if n < 3:
+        raise ValueError("Need at least a triangle (n >= 3).")
+
+    if opening_angle_rad is None:
+        opening_angle_rad = np.deg2rad(100.0)  # Default
+
+    alpha = opening_angle_rad
+
+    # Particle positions on a regular n-gon
+    vertex_angles = np.linspace(0.0, 2.0 * np.pi, n, endpoint=False)
+    positions = np.stack(
+        [R * np.cos(vertex_angles), R * np.sin(vertex_angles)],
+        axis=1
+    )
+
+    orientations = np.zeros(n)
+    patch_angles = np.zeros((n, 2))
+
+    for i in range(n):
+        i_prev = (i - 1) % n
+        i_next = (i + 1) % n
+
+        v_prev = positions[i_prev] - positions[i]
+        v_next = positions[i_next] - positions[i]
+
+        beta_prev = np.arctan2(v_prev[1], v_prev[0])
+        beta_next = np.arctan2(v_next[1], v_next[0])
+
+        avg_vec = np.array([
+            np.cos(beta_prev) + np.cos(beta_next),
+            np.sin(beta_prev) + np.sin(beta_next),
+        ])
+        avg_beta = np.arctan2(avg_vec[1], avg_vec[0])
+
+        theta_i = avg_beta
+        orientations[i] = theta_i
+
+        patch_to_prev = theta_i - alpha / 2.0
+        patch_to_next = theta_i + alpha / 2.0
+
+        patch_to_prev = (patch_to_prev + np.pi) % (2.0 * np.pi) - np.pi
+        patch_to_next = (patch_to_next + np.pi) % (2.0 * np.pi) - np.pi
+
+        patch_angles[i, 0] = patch_to_prev
+        patch_angles[i, 1] = patch_to_next
+
+    return positions, orientations, patch_angles
+
+def get_shape(shape_id=None, opening_angle_rad=None):
     """
     Get reference shape geometry.
 
@@ -143,10 +211,12 @@ def get_shape(shape_id=None):
     ----------
     shape_id : str, optional
         Shape identifier ('square' or 'triangle'). If None, uses global shape_ID.
+    opening_angle_rad : float, optional
+        Opening angle in radians. If None, uses default value for the shape.
 
     Returns
     -------
-    array : Reference shape positions
+    array : Reference shape positions (n, 2)
     """
     if shape_id is None:
         shape_id = shape_ID
@@ -154,20 +224,21 @@ def get_shape(shape_id=None):
     shape_id = shape_id.lower()
 
     if shape_id == 'triangle':
-        ref_shape = 2 * CENTER_RADIUS * jnp.array([
-            [0., 0.],
-            [1., 0.],
-            [0.5, jnp.sqrt(3) / 2.]
-        ])
-    else:  # square
-        ref_shape = np.array([
-            [0., 0.],
-            [0., 2 * CENTER_RADIUS],
-            [2 * CENTER_RADIUS, 0.],
-            [2 * CENTER_RADIUS, 2 * CENTER_RADIUS]
-        ])
+        n = 3
+        # Radius such that edge length = 2*CENTER_RADIUS
+        radius = 1.0 / np.sin(np.pi/3)
+    elif shape_id == 'square':
+        n = 4
+        # Radius such that edge length = 2*CENTER_RADIUS
+        radius = 1.0 / np.sin(np.pi/4)
+    else:
+        # Fallback: assume square
+        n = 4
+        radius = 1.0 / np.sin(np.pi/4)
 
-    return ref_shape
+    positions, _, _ = regular_ngon_reference(n, R=radius, opening_angle_rad=opening_angle_rad)
+
+    return positions
 
 # Initialize reference shape with default
 REF_SHAPE = get_shape(shape_ID)

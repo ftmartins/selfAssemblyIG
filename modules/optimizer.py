@@ -30,10 +30,11 @@ from .utility_functions import (
 from .evaluation_functions import avg_loss, make_cluster_list
 
 print("Loading Self-Assembly Optimizer Functions")
-def get_mean_loss(params, initial_position, keys):
+def get_mean_loss(params, initial_position, keys, ref_shape=None):
     states, _, _ = v_run_my_sim(params, initial_position, SQRT_NUM_STEPS_TO_OPT, CENTER_RADIUS, keys)
-    return avg_loss(states.position.center)
+    return avg_loss(states.position.center, ref_shape)
 
+# Note: g_mean_loss is gradient with respect to first argument (params) only
 g_mean_loss = jit(value_and_grad(get_mean_loss)) #if need to, switch to jacfwd
 #g_mean_loss = jit(jacfwd(get_mean_loss)) #this gives nans, no idea why
 
@@ -147,19 +148,26 @@ def optimize(input_params,
           cl_type=None):
     bprint(f" Opt State :{opt_state}")
     opt_params = get_params(opt_state)
-    run_params = make_params(opt_params)   
+    run_params = make_params(opt_params)
     bprint(f"Step Params are: {run_params}")
     key, split = random.split(key)
     simulation_keys = random.split(split, batch_size)
     bprint('Warm Start')
     initial_positions = run_partial_sim(run_params, split, batch_size)
 
+    # Convert cl_type string to ref_shape array
+    if cl_type is not None:
+      from config_patchy_particle import get_shape
+      ref_shape = get_shape(cl_type)
+    else:
+      ref_shape = None
+
     gs = []
     Hs = []
-    ls = 0    
+    ls = 0
     bprint(f"Initial Positions:{initial_positions}")
     for i in range(loop_batch):
-      l, g = g_mean_loss(run_params, initial_positions, simulation_keys)
+      l, g = g_mean_loss(run_params, initial_positions, simulation_keys, ref_shape)
       if FIND_HESSIAN:
         Hes = h_mean_loss(run_params, initial_positions, simulation_keys)
       g = clip_gradient(g)
