@@ -31,6 +31,29 @@ from .evaluation_functions import avg_loss, make_cluster_list
 
 print("Loading Self-Assembly Optimizer Functions")
 def get_mean_loss(params, initial_position, keys, ref_shape=None):
+    """
+    Calculate mean loss over batch of simulations.
+
+    IMPORTANT: v_run_my_sim uses nested scan with remat, running
+    SQRT_NUM_STEPS_TO_OPT × SQRT_NUM_STEPS_TO_OPT total simulation steps.
+    For NUM_STEPS_TO_OPT=1000, this is 31×31=961 steps per simulation,
+    necessary for proper equilibration before loss calculation.
+
+    Parameters
+    ----------
+    params : array
+        Particle parameters (angles and energies)
+    initial_position : RigidBody
+        Initial particle configurations
+    keys : array
+        Random keys for simulations
+    ref_shape : array, optional
+        Reference shape for loss calculation (if None, uses global REF_SHAPE)
+
+    Returns
+    -------
+    float : Mean loss across batch
+    """
     states, _, _ = v_run_my_sim(params, initial_position, SQRT_NUM_STEPS_TO_OPT, CENTER_RADIUS, keys)
     return avg_loss(states.position.center, ref_shape)
 
@@ -114,7 +137,8 @@ def optimize(input_params,
              myoptsteps = 1,
              optimizer = OPTIMIZER,
              last_step = 0,
-             cl_type=None):
+             cl_type=None,
+             return_history=False):
   
   startopttime = time.time()
   learning_rate_schedule = jnp.ones(opt_steps)*learning_rate
@@ -221,7 +245,13 @@ def optimize(input_params,
   opt_state = opt_init(input_params)
   min_loss_params = max_cl_params = input_params
   min_loss = cl_loss = 1e6
-  max_cl = 0 
+  max_cl = 0
+
+  # Initialize history tracking if requested
+  if return_history:
+    loss_history = []
+    param_history = []
+    grad_history = [] 
   
   for i in range(last_step, opt_steps):
     key, split=random.split(key)
@@ -274,11 +304,37 @@ def optimize(input_params,
     if step_cl > max_cl:
       max_cl = step_cl
       cl_loss = loss
-      max_cl_params = get_params(opt_state)    
+      max_cl_params = get_params(opt_state)
+
+    # Track history if requested
+    if return_history:
+      current_params = get_params(opt_state)
+      run_params = make_params(current_params)
+      # Calculate gradient for history (recompute on current params)
+      key_hist, split_hist = random.split(key)
+      sim_keys_hist = random.split(split_hist, batch_size)
+      init_pos_hist = run_partial_sim(run_params, split_hist, batch_size)
+      ref_shape_hist = get_shape(cl_type) if cl_type is not None else None
+      _, grad_hist = g_mean_loss(run_params, init_pos_hist, sim_keys_hist, ref_shape_hist)
+
+      loss_history.append(float(loss))
+      param_history.append(np.array(run_params))
+      grad_history.append(np.array(grad_hist))
+
     opt_state = new_opt_state
     cmd='a'
   myoptsteps = myoptsteps + opt_steps
   finopttime = int((time.time()-startopttime)//60)
   print(f"This optimization took {finopttime} minutes.")
-  
-  return min_loss, min_loss_params,cl_loss, max_cl_params, get_params(new_opt_state), myoptsteps
+
+  if return_history:
+    # Return extended tuple with history
+    history = {
+      'loss': np.array(loss_history),
+      'params': np.array(param_history),
+      'grads': np.array(grad_history)
+    }
+    return min_loss, min_loss_params, cl_loss, max_cl_params, get_params(new_opt_state), myoptsteps, history
+  else:
+    # Return original tuple for backward compatibility
+    return min_loss, min_loss_params, cl_loss, max_cl_params, get_params(new_opt_state), myoptsteps

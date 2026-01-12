@@ -246,32 +246,33 @@ def run_sim(thetas_and_energy,
   soft_sphere_eps = 10000*soft_sphere_eps
 
 
-  ### print parameters
-  # Convert JAX arrays to regular Python values for printing
-  def to_float(x):
-    """Convert JAX traced values to regular floats for printing."""
-    try:
-      return float(x)
-    except:
-      return x
+  ### print parameters (controlled by print_sim flag)
+  if print_sim:
+    # Convert JAX arrays to regular Python values for printing
+    def to_float(x):
+      """Convert JAX traced values to regular floats for printing."""
+      try:
+        return float(x)
+      except:
+        return x
 
-  print("="*80)
-  print("ENERGY FUNCTION PARAMETERS")
-  print("="*80)
-  print(f"Temperature (kT): {to_float(kT)}")
-  print(f"Time Step (dt): {to_float(DT)}")
-  print(f"Number of Steps: {num_steps}")
-  print(f"Number of Patches: {len(thetas)}")
-  print(f"Center Radius: {to_float(CENTER_RADIUS)}")
-  print(f"Center Mass: {to_float(CENTER_MASS)}")
-  print(f"Patch Mass: {to_float(PATCH_MASS)}")
-  print(f"Morse Alpha (ALPHA): {to_float(ALPHA)}")
-  print(f"Morse r_cutoff (R_CUTOFF): {to_float(R_CUTOFF)}")
-  print(f"Morse sigma: 0.0")
-  print(f"Soft Sphere sigma: {to_float(CENTER_RADIUS*2)}")
-  print(f"\nMorse Epsilon Matrix (padded):\n{morse_eps}")
-  print(f"\nSoft Sphere Epsilon Matrix:\n{soft_sphere_eps}")
-  print("="*80)
+    print("="*80)
+    print("ENERGY FUNCTION PARAMETERS")
+    print("="*80)
+    print(f"Temperature (kT): {to_float(kT)}")
+    print(f"Time Step (dt): {to_float(DT)}")
+    print(f"Number of Steps: {num_steps}")
+    print(f"Number of Patches: {len(thetas)}")
+    print(f"Center Radius: {to_float(CENTER_RADIUS)}")
+    print(f"Center Mass: {to_float(CENTER_MASS)}")
+    print(f"Patch Mass: {to_float(PATCH_MASS)}")
+    print(f"Morse Alpha (ALPHA): {to_float(ALPHA)}")
+    print(f"Morse r_cutoff (R_CUTOFF): {to_float(R_CUTOFF)}")
+    print(f"Morse sigma: 0.0")
+    print(f"Soft Sphere sigma: {to_float(CENTER_RADIUS*2)}")
+    print(f"\nMorse Epsilon Matrix (padded):\n{morse_eps}")
+    print(f"\nSoft Sphere Epsilon Matrix:\n{soft_sphere_eps}")
+    print("="*80)
 
   pair_energy_soft = energy.soft_sphere_pair(displacement, species=1+len(thetas), sigma = CENTER_RADIUS*2, epsilon=soft_sphere_eps)
   pair_energy_morse = energy.morse_pair(displacement, species=1+len(thetas), sigma = 0.0, epsilon=morse_eps, alpha=ALPHA, r_cutoff=R_CUTOFF) #why is r_cutoff =1?
@@ -282,12 +283,26 @@ def run_sim(thetas_and_energy,
   step_fn = jit(step_fn)
   state = init_fn(key, x0, mass=shape.mass())
 
-  do_step = lambda state, t: (step_fn(state), (state.position.center, state.position.orientation))
+  do_step = lambda state, t: (step_fn(state), 0.)
   do_step = jit(do_step)
 
-  # Run simulation and collect trajectory
+  # inner/outer: corresponds to forward/reverse (probably reversed order) mode AD
+  # CRITICAL: Use nested scan with remat for proper equilibration and gradient computation
+  # This runs num_steps × num_steps total simulation steps (e.g., 31×31=961 for √1000)
   inner_steps = jnp.arange(num_steps)
-  state, (positions, orientations) = lax.scan(do_step, state, inner_steps)
+
+  def do_loss_step(state, i):
+    # Inner scan runs num_steps simulation steps
+    state, _ = lax.scan(do_step, state, inner_steps)
+    if print_progress:
+      jax.debug.print("Completed outer step: {i}/{total}", i=i+1, total=num_steps)
+    # Collect both positions and orientations at each outer step
+    return state, (state.position.center, state.position.orientation)
+
+  # remat trades computation for memory (recomputes gradients instead of storing)
+  do_loss_step = jit(remat(do_loss_step))
+  # Outer scan runs num_steps times, each time running inner scan
+  state, (positions, orientations) = lax.scan(do_loss_step, state, inner_steps)
 
   return state, positions, orientations
 
