@@ -875,6 +875,26 @@ def run_yield_simulation(params_dict, args):
 
         yields[poly_type] = particles_in_type / total_particles
 
+    # Calculate structure-based yields (DUAL REPORTING)
+    yields_structure = {}
+
+    # Count total assembled structures (excluding monomers)
+    polygon_types_to_count = [k for k in polygon_counts.keys() if k != 'monomers']
+    total_structures = sum(polygon_counts[k] for k in polygon_types_to_count)
+
+    # Calculate assembly efficiency (separate metric)
+    monomer_count = polygon_counts.get('monomers', 0)
+    assembly_efficiency = (total_particles - monomer_count) / total_particles if total_particles > 0 else 0.0
+
+    for poly_type, count in polygon_counts.items():
+        if poly_type == 'monomers':
+            # Monomers: NOT included in structure-based yield
+            # Will be reported separately via assembly_efficiency
+            yields_structure[poly_type] = None  # Explicitly excluded
+        else:
+            # Assembled structures: fraction of detected structures
+            yields_structure[poly_type] = count / total_structures if total_structures > 0 else 0.0
+
     # Print results
     print(f"\n{'='*80}")
     print(f"Polygon Yield Results")
@@ -886,12 +906,22 @@ def run_yield_simulation(params_dict, args):
     print(f"\nYields (as fraction of particles):")
     for poly_type, yield_val in yields.items():
         print(f"  {poly_type.capitalize():10s}: {yield_val:.4f} ({yield_val*100:.2f}%)")
+
+    print(f"\nYields (as fraction of structures - assembled only):")
+    for poly_type, yield_val in yields_structure.items():
+        if yield_val is not None:  # Skip monomers
+            print(f"  {poly_type.capitalize():10s}: {yield_val:.4f} ({yield_val*100:.2f}%)")
+
+    print(f"\nAssembly Metrics:")
+    print(f"  Total assembled structures: {total_structures}")
+    print(f"  Assembly efficiency: {assembly_efficiency:.4f} ({assembly_efficiency*100:.2f}%)")
+    print(f"  Monomer count: {monomer_count}")
     print(f"{'='*80}\n")
 
-    return final_state, polygon_counts, yields
+    return final_state, polygon_counts, yields, yields_structure, assembly_efficiency
 
 def save_yield_results(params_dict, args, final_state, polygon_counts,
-                       yields, timestamp):
+                       yields, yields_structure, assembly_efficiency, timestamp):
     """Save yield results to NPZ file and text summary."""
     os.makedirs(args.output_dir, exist_ok=True)
 
@@ -919,6 +949,8 @@ def save_yield_results(params_dict, args, final_state, polygon_counts,
         output_file,
         shape=shape_name,
         yields=yields,
+        yields_structure=yields_structure,
+        assembly_efficiency=assembly_efficiency,
         polygon_counts=polygon_counts,
         num_particles=args.num_particles,
         num_steps=args.num_steps,
@@ -963,6 +995,21 @@ def save_yield_results(params_dict, args, final_state, polygon_counts,
         for poly_type, yield_val in yields.items():
             f.write(f"  {poly_type.capitalize():10s}: {yield_val*100:.2f}%\n")
 
+        # Calculate total structures for text output
+        polygon_types_to_count = [k for k in polygon_counts.keys() if k != 'monomers']
+        total_structures = sum(polygon_counts[k] for k in polygon_types_to_count)
+        monomer_count = polygon_counts.get('monomers', 0)
+
+        f.write(f"\nYields (% of structures - assembled only):\n")
+        for poly_type, yield_val in yields_structure.items():
+            if yield_val is not None:  # Skip monomers
+                f.write(f"  {poly_type.capitalize():10s}: {yield_val*100:.2f}%\n")
+
+        f.write(f"\nAssembly Metrics:\n")
+        f.write(f"  Total assembled structures: {total_structures}\n")
+        f.write(f"  Assembly efficiency: {assembly_efficiency*100:.2f}%\n")
+        f.write(f"  Monomer count: {monomer_count}\n")
+
     print(f"Results saved:")
     print(f"  NPZ file: {output_file}")
     print(f"  Summary: {summary_file}")
@@ -984,11 +1031,11 @@ def main():
     print(args.num_particles, 'num particles args')
 
     # Run simulation
-    final_state, polygon_counts, yields = run_yield_simulation(params_dict, args)
+    final_state, polygon_counts, yields, yields_structure, assembly_efficiency = run_yield_simulation(params_dict, args)
     
     # Save results
     output_file = save_yield_results(
-        params_dict, args, final_state, polygon_counts, yields, timestamp
+        params_dict, args, final_state, polygon_counts, yields, yields_structure, assembly_efficiency, timestamp
     )
 
     print(f"\n{'='*80}")
