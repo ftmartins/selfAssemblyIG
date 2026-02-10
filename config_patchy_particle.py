@@ -67,18 +67,19 @@ BOX_SIZE = get_BOX_SIZE(DENSITY, NUM_PARTICLES, CENTER_RADIUS)
 
 # Optimization hyperparameters
 BATCH_SIZE = 64
-LEARNING_RATES = [0.5, 0.1, 0.05]  # Coarse, medium, fine
+LEARNING_RATES = [0.5, 0.1, 0.05, 1e-3]  # Coarse, medium, fine
 OPTIMIZER = 'adam'  # 'adam' or 'rms'
 OPTIMIZER_TYPE = OPTIMIZER  # Alias
-OPT_STEPS = 2
-OPT_RUNS = 3
+OPT_STEPS = 100
+OPT_RUNS = 4
 
 # Three-stage optimization schedule
 OPT_STAGE_STEPS = [
     OPT_STEPS,   # Stage 1: Coarse (~17 steps)
     OPT_STEPS,  # Stage 2: Medium (~3 steps)
     OPT_STEPS,  # Stage 3: Fine (~3 steps)
-]
+    OPT_STEPS, # Stage 4
+    ]
 
 # Energy constraints
 MAX_ENERGY = 30.0
