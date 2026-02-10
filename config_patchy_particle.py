@@ -19,7 +19,7 @@ config.update("jax_debug_nans", True)
 # ============================================================================
 # CONTROL FLAGS
 # ============================================================================
-bug_print = True  # Enable debug printing
+bug_print = False  # Enable debug printing (set to True for verbose output)
 FIND_HESSIAN = False  # Compute Hessian during optimization
 RAND_ENG_CHECK = True  # Enable energy randomization check
 
@@ -58,7 +58,6 @@ QUICK_STEPS = int(np.sqrt((NUM_STEPS - NUM_STEPS_TO_OPT)))
 
 # Particle count for optimization
 NUM_PARTICLES = 16
-NUM_PARTICLES_OPT = NUM_PARTICLES  # Alias for clarity
 
 # Density and box size
 DENSITY = 0.1
@@ -90,7 +89,6 @@ CLIP = 10000.0
 
 # Logging
 WRITE_EVERY = 10
-LOG_STEPS = True
 
 # ============================================================================
 # YIELD SIMULATION PARAMETERS
@@ -100,7 +98,7 @@ LOG_STEPS = True
 NUM_PARTICLES_YIELD = 1000
 
 # Simulation length
-NUM_STEPS_YIELD = 1_000_001
+NUM_STEPS_YIELD = 100_000
 
 # Box size for yield simulation
 BOX_SIZE_YIELD = get_BOX_SIZE(DENSITY, NUM_PARTICLES_YIELD, CENTER_RADIUS)
@@ -108,8 +106,17 @@ BOX_SIZE_YIELD = get_BOX_SIZE(DENSITY, NUM_PARTICLES_YIELD, CENTER_RADIUS)
 # Polygon counting parameters
 CLOSENESS_PENALTY = 0.01
 CLOSENESS_PENALTY_NEIGHBORS = 1
-CLUSTER_CHECK_TOLERANCE = 0.5
 patch_allowance = PATCH_SIZE * 2 / 3.
+
+# ============================================================================
+# YIELD SIMULATION PARAMETER GRID
+# ============================================================================
+YIELD_ALPHAS_DEG = np.linspace(70, 115, 10)   # 10 opening angles (degrees)
+YIELD_ZETAS = np.logspace(np.log10(0.1), np.log10(50), 10)  # 10 selectivities (log-spaced)
+NUM_YIELD_JOBS = len(YIELD_ALPHAS_DEG) * len(YIELD_ZETAS)   # 100 total jobs
+NUM_REALIZATIONS = 5  # Independent runs per parameter set
+SAMPLE_INTERVAL_YIELD = 1000  # Save trajectory every N steps during production
+CHECKPOINT_INTERVAL = 10000  # Save checkpoint every N steps during equilibration/production
 
 # ============================================================================
 # SHAPE CONFIGURATIONS
@@ -258,7 +265,6 @@ JOBID = "optimization_run"
 # RANDOM SEEDS
 # ============================================================================
 
-KEY_PARAM = 0
 KEY_PARAM_OPT = 0
 KEY_PARAM_YIELD = 1273
 
@@ -268,9 +274,6 @@ KEY_PARAM_YIELD = 1273
 
 # Create displacement and shift functions for periodic boundary conditions
 displacement, shift = space.periodic(BOX_SIZE)
-
-# Create random key
-key = random.PRNGKey(KEY_PARAM)
 
 # ============================================================================
 # IMPORTANT NOTES
@@ -289,7 +292,7 @@ key = random.PRNGKey(KEY_PARAM)
 
 # NOTE 3: NUM_PARTICLES changes
 # - NUM_PARTICLES = 16 for optimization
-# - NUM_PARTICLES_YIELD = 100 for yield measurements
+# - NUM_PARTICLES_YIELD = 1000 for yield measurements
 # - This affects BOX_SIZE calculation
 
 print("Configuration loaded successfully!")
