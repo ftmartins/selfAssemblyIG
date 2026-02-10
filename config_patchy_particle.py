@@ -20,7 +20,7 @@ config.update("jax_debug_nans", True)
 # ============================================================================
 # CONTROL FLAGS
 # ============================================================================
-bug_print = True  # Enable debug printing
+bug_print = False  # Enable debug printing (set to True for verbose output)
 FIND_HESSIAN = False  # Compute Hessian during optimization
 RAND_ENG_CHECK = True  # Enable energy randomization check
 
@@ -71,7 +71,7 @@ BATCH_SIZE = 64
 LEARNING_RATES = [0.5, 0.1, 0.05]  # Coarse, medium, fine
 OPTIMIZER = 'adam'  # 'adam' or 'rms'
 OPTIMIZER_TYPE = OPTIMIZER  # Alias
-OPT_STEPS = 2
+OPT_STEPS = 100
 OPT_RUNS = 3
 
 # Three-stage optimization schedule
@@ -100,7 +100,7 @@ LOG_STEPS = True
 NUM_PARTICLES_YIELD = 1000
 
 # Simulation length
-NUM_STEPS_YIELD = 8000#0
+NUM_STEPS_YIELD = 100_000
 
 # Box size for yield simulation
 BOX_SIZE_YIELD = get_BOX_SIZE(DENSITY, NUM_PARTICLES_YIELD, CENTER_RADIUS)
@@ -110,6 +110,16 @@ CLOSENESS_PENALTY = 0.01
 CLOSENESS_PENALTY_NEIGHBORS = 1
 CLUSTER_CHECK_TOLERANCE = 0.5
 patch_allowance = PATCH_SIZE * 2 / 3.
+
+# ============================================================================
+# YIELD SIMULATION PARAMETER GRID
+# ============================================================================
+YIELD_ALPHAS_DEG = np.linspace(70, 115, 10)   # 10 opening angles (degrees)
+YIELD_ZETAS = np.logspace(np.log10(0.1), np.log10(50), 10)  # 10 selectivities (log-spaced)
+NUM_YIELD_JOBS = len(YIELD_ALPHAS_DEG) * len(YIELD_ZETAS)   # 100 total jobs
+NUM_REALIZATIONS = 5  # Independent runs per parameter set
+SAMPLE_INTERVAL_YIELD = 1000  # Save trajectory every N steps during production
+CHECKPOINT_INTERVAL = 10000  # Save checkpoint every N steps during equilibration/production
 
 # ============================================================================
 # SHAPE CONFIGURATIONS
