@@ -59,7 +59,6 @@ QUICK_STEPS = int(np.sqrt((NUM_STEPS - NUM_STEPS_TO_OPT)))
 
 # Particle count for optimization
 NUM_PARTICLES = 16
-NUM_PARTICLES_OPT = NUM_PARTICLES  # Alias for clarity
 
 # Density and box size
 DENSITY = 0.1
@@ -70,9 +69,7 @@ BOX_SIZE = get_BOX_SIZE(DENSITY, NUM_PARTICLES, CENTER_RADIUS)
 BATCH_SIZE = 64
 LEARNING_RATES = [0.5, 0.1, 0.05]  # Coarse, medium, fine
 OPTIMIZER = 'adam'  # 'adam' or 'rms'
-OPTIMIZER_TYPE = OPTIMIZER  # Alias
 OPT_STEPS = 100
-OPT_RUNS = 3
 
 # Three-stage optimization schedule
 OPT_STAGE_STEPS = [
@@ -90,7 +87,6 @@ CLIP = 10000.0
 
 # Logging
 WRITE_EVERY = 10
-LOG_STEPS = True
 
 # ============================================================================
 # YIELD SIMULATION PARAMETERS
@@ -108,7 +104,6 @@ BOX_SIZE_YIELD = get_BOX_SIZE(DENSITY, NUM_PARTICLES_YIELD, CENTER_RADIUS)
 # Polygon counting parameters
 CLOSENESS_PENALTY = 0.01
 CLOSENESS_PENALTY_NEIGHBORS = 1
-CLUSTER_CHECK_TOLERANCE = 0.5
 patch_allowance = PATCH_SIZE * 2 / 3.
 
 # ============================================================================
@@ -268,7 +263,6 @@ JOBID = "optimization_run"
 # RANDOM SEEDS
 # ============================================================================
 
-KEY_PARAM = 0
 KEY_PARAM_OPT = 0
 KEY_PARAM_YIELD = 1273
 
@@ -278,9 +272,6 @@ KEY_PARAM_YIELD = 1273
 
 # Create displacement and shift functions for periodic boundary conditions
 displacement, shift = space.periodic(BOX_SIZE)
-
-# Create random key
-key = random.PRNGKey(KEY_PARAM)
 
 # ============================================================================
 # IMPORTANT NOTES
@@ -299,7 +290,7 @@ key = random.PRNGKey(KEY_PARAM)
 
 # NOTE 3: NUM_PARTICLES changes
 # - NUM_PARTICLES = 16 for optimization
-# - NUM_PARTICLES_YIELD = 100 for yield measurements
+# - NUM_PARTICLES_YIELD = 1000 for yield measurements
 # - This affects BOX_SIZE calculation
 
 print("Configuration loaded successfully!")
