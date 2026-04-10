@@ -18,6 +18,7 @@ plot_configuration  : matplotlib visualisation helper
 from __future__ import annotations
 
 import functools
+import os
 from dataclasses import dataclass
 
 from tqdm import tqdm
@@ -690,6 +691,62 @@ def generate_ic(
     return MCMCState(q=q, v=v)
 
 
+# ── Checkpoint helpers ────────────────────────────────────────────────────────
+
+def save_checkpoint(
+    checkpoint_file: str,
+    state: MCMCState,
+    rng: np.random.Generator,
+    phase: str,
+    sweep: int,
+    N_traj_partial: np.ndarray,
+    E_list: list,
+    snap_sweeps: list,
+    snapshots: list,
+    acc_md_list: list,
+    acc_ins_list: list,
+    acc_del_list: list,
+    md_E_list: list,
+) -> None:
+    """Persist full simulation state to disk for crash recovery."""
+    data = dict(
+        q              = state.q.copy(),
+        v              = state.v.copy(),
+        rng_state      = rng.bit_generator.state,
+        phase          = phase,
+        sweep          = sweep,
+        N_traj_partial = N_traj_partial.copy(),
+        E_list         = np.array(E_list, dtype=np.float32),
+        snap_sweeps    = np.array(snap_sweeps, dtype=np.int32),
+        snapshots      = np.array(snapshots, dtype=object),
+        acc_md_list    = np.array(acc_md_list),
+        acc_ins_list   = np.array(acc_ins_list),
+        acc_del_list   = np.array(acc_del_list),
+        md_E_list      = np.array(md_E_list, dtype=object) if md_E_list else np.empty(0),
+    )
+    np.save(checkpoint_file, data, allow_pickle=True)
+    print(f'  [checkpoint] saved  phase={phase}  sweep={sweep}  N={state.N}')
+
+
+def load_checkpoint(
+    checkpoint_file: str,
+    rng: np.random.Generator,
+) -> 'dict | None':
+    """
+    Load a checkpoint saved by save_checkpoint.
+
+    Restores the RNG state in-place.  Returns the state dict, or None if
+    the file does not exist.
+    """
+    if not os.path.exists(checkpoint_file):
+        return None
+    data = np.load(checkpoint_file, allow_pickle=True).item()
+    rng.bit_generator.state = data['rng_state']
+    print(f'  [checkpoint] resumed  phase={data["phase"]}  sweep={data["sweep"]}'
+          f'  N={len(data["q"])}')
+    return data
+
+
 # ── High-level simulation loop ────────────────────────────────────────────────
 
 def run_gcmc(
@@ -709,6 +766,8 @@ def run_gcmc(
     dump_md_energies: bool = False,
     md_energy_chunks: int = 10,
     verbose: bool = True,
+    checkpoint_file: 'str | None' = None,
+    checkpoint_interval: 'int | None' = None,
 ) -> dict:
     """
     Full GCMC run: equilibration then production.
@@ -732,7 +791,11 @@ def run_gcmc(
     dump_md_energies  : if True, record energy at md_energy_chunks checkpoints
                         along every MD run in the production phase
     md_energy_chunks  : number of energy checkpoints per MD run
-    verbose           : print progress every 10% of sweeps
+    verbose             : print progress every 10% of sweeps
+    checkpoint_file     : path to checkpoint file (e.g. 'runs/mu-2_N10_kT1/checkpoint.npy').
+                          If provided, state is saved every checkpoint_interval sweeps and
+                          the run resumes from this file if it already exists.
+    checkpoint_interval : save frequency in sweeps; defaults to snapshot_interval.
 
     Returns
     -------
@@ -749,35 +812,70 @@ def run_gcmc(
         'md_E_traj'      : (n_disp_moves, md_energy_chunks) float32
                            only present when dump_md_energies=True
     """
+    ckpt_interval = checkpoint_interval if checkpoint_interval is not None else snapshot_interval
+
     sweep_kwargs = dict(
         f_disp=f_disp, MD_STEPS=MD_STEPS, MD_DT=MD_DT, GAMMA=GAMMA,
         dump_md_energies=False,   # disabled during equilibration
     )
-
-    # ── Equilibration ──────────────────────────────────────────────────────────
-    for s in tqdm(range(n_equil)):
-        state, _ = mc_sweep(state, L, kT, mu, params, rng, **sweep_kwargs)
-        if verbose and (s + 1) % max(1, n_equil // 10) == 0:
-            print(f'  equil {s + 1:6d}/{n_equil}  N={state.N}')
-
-    # ── Production ────────────────────────────────────────────────────────────
     prod_sweep_kwargs = dict(
         f_disp=f_disp, MD_STEPS=MD_STEPS, MD_DT=MD_DT, GAMMA=GAMMA,
         dump_md_energies=dump_md_energies,
         md_energy_chunks=md_energy_chunks,
     )
 
-    N_traj       = np.empty(n_prod, dtype=np.int32)
-    E_list       = []
-    snap_sweeps  = []
-    snapshots    = []   # list of (N_i, 3) arrays
-    acc_md_list  = []
-    acc_ins_list = []
-    acc_del_list = []
-    md_E_list    = []   # list of (n_chunks,) arrays, one per displacement move
+    # ── Attempt checkpoint restore ─────────────────────────────────────────────
+    ckpt = load_checkpoint(checkpoint_file, rng) if checkpoint_file else None
 
-    print('Before GCMC loop',flush=True)
-    for s in tqdm(range(n_prod)):
+    if ckpt is not None:
+        state        = MCMCState(q=ckpt['q'], v=ckpt['v'])
+        start_phase  = str(ckpt['phase'])
+        start_sweep  = int(ckpt['sweep']) + 1   # resume AFTER the saved sweep
+        N_traj       = np.zeros(n_prod, dtype=np.int32)
+        N_traj[:len(ckpt['N_traj_partial'])] = ckpt['N_traj_partial']
+        E_list       = list(ckpt['E_list'])
+        snap_sweeps  = list(ckpt['snap_sweeps'])
+        snapshots    = list(ckpt['snapshots'])
+        acc_md_list  = list(ckpt['acc_md_list'])
+        acc_ins_list = list(ckpt['acc_ins_list'])
+        acc_del_list = list(ckpt['acc_del_list'])
+        md_E_list    = list(ckpt['md_E_list']) if ckpt['md_E_list'].size > 0 else []
+    else:
+        start_phase  = 'eq'
+        start_sweep  = 0
+        N_traj       = np.empty(n_prod, dtype=np.int32)
+        E_list       = []
+        snap_sweeps  = []
+        snapshots    = []
+        acc_md_list  = []
+        acc_ins_list = []
+        acc_del_list = []
+        md_E_list    = []
+
+    eq_start   = start_sweep if start_phase == 'eq'   else n_equil
+    prod_start = start_sweep if start_phase == 'prod' else 0
+
+    def _save(phase, s):
+        if checkpoint_file is None:
+            return
+        save_checkpoint(
+            checkpoint_file, state, rng, phase, s,
+            N_traj[:s + 1] if phase == 'prod' else N_traj[:0],
+            E_list, snap_sweeps, snapshots,
+            acc_md_list, acc_ins_list, acc_del_list, md_E_list,
+        )
+
+    # ── Equilibration ──────────────────────────────────────────────────────────
+    if eq_start < n_equil:
+        for s in range(eq_start, n_equil):
+            state, _ = mc_sweep(state, L, kT, mu, params, rng, **sweep_kwargs)
+            if verbose and (s + 1) % max(1, n_equil // 10) == 0:
+                print(f'  equil {s + 1:6d}/{n_equil}  N={state.N}')
+            if checkpoint_file and (s + 1) % ckpt_interval == 0:
+                _save('eq', s)
+
+    # ── Production ────────────────────────────────────────────────────────────
+    for s in tqdm(range(prod_start, n_prod)):
         state, stats = mc_sweep(state, L, kT, mu, params, rng, **prod_sweep_kwargs)
         N_traj[s] = state.N
 
@@ -788,7 +886,6 @@ def run_gcmc(
         if stats['nl'] > 0:
             acc_del_list.append(stats['al'] / stats['nl'])
 
-
         if dump_md_energies and stats.get('md_E_trajs'):
             md_E_list.extend(stats['md_E_trajs'])
 
@@ -797,9 +894,16 @@ def run_gcmc(
             E_list.append(np.float32(E_now))
             snap_sweeps.append(s + 1)
             snapshots.append(state.q.copy())
-            if verbose and (s + 1) % max(1, n_prod // 100) == 0:
+            if verbose and (s + 1) % max(1, n_prod // 10) == 0:
                 print(f'  prod  {s + 1:6d}/{n_prod}  N={state.N}  '
-                      f'E/N={E_now/max(state.N,1):.2f}', flush=True)
+                      f'E/N={E_now/max(state.N,1):.2f}')
+            if checkpoint_file and (s + 1) % ckpt_interval == 0:
+                _save('prod', s)
+
+    # ── Clean up checkpoint on successful completion ───────────────────────────
+    if checkpoint_file and os.path.exists(checkpoint_file):
+        os.remove(checkpoint_file)
+        print('[checkpoint] simulation complete, checkpoint removed.')
 
     result = {
         'N_traj'          : N_traj,

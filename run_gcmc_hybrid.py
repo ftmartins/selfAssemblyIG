@@ -57,6 +57,7 @@ from config_gcmc import (
     DEFAULT_SAVE_INTERVAL,
     DEFAULT_N_INIT,
     DEFAULT_SEED,
+    make_run_dir,
 )
 from modules.gcmc_hybrid import (
     make_gcmc_params,
@@ -109,16 +110,17 @@ def parse_args():
     p.add_argument('--seed',            type=int,   default=DEFAULT_SEED,
                    help=f'Random seed  (default: {DEFAULT_SEED})')
     # Output
-    p.add_argument('--output',          type=str,
-                   default=os.path.join(GCMC_RUNS_DIR, 'gcmc_run.npz'),
-                   help=f'Output NPZ file  (default: {GCMC_RUNS_DIR}/gcmc_run.npz)')
+    p.add_argument('--output',          type=str, default=None,
+                   help='Output NPZ file.  Defaults to <run_dir>/run.npz '
+                        'where run_dir is auto-built from simulation parameters.')
     p.add_argument('--snapshot_interval', type=int, default=DEFAULT_SAVE_INTERVAL,
                    help=f'Save snapshot + energy every N production sweeps  '
                         f'(default: {DEFAULT_SAVE_INTERVAL})')
     p.add_argument('--realization',      type=int, default=0,
-                   help='Realization index — appended to the output filename so '
-                        'multiple runs with the same parameters do not overwrite '
-                        'each other  (default: 0)')
+                   help='Realization index — disambiguates runs with identical '
+                        'parameters  (default: 0)')
+    p.add_argument('--no_checkpoint',   action='store_true',
+                   help='Disable checkpoint saving (e.g. for short test runs)')
     # MD energy diagnostic
     p.add_argument('--dump_md_energies', action='store_true',
                    help='Record energy at checkpoints along each MD run.  '
@@ -152,14 +154,20 @@ def _pack_snapshots(snapshots: list, snapshot_N: np.ndarray) -> np.ndarray:
 def main():
     args = parse_args()
 
-    # Auto-build output path if user left the default, embedding all key params
-    if args.output == os.path.join(GCMC_RUNS_DIR, 'gcmc_run.npz'):
-        oa_deg = np.degrees(args.opening_angle)
-        args.output = os.path.join(
-            GCMC_RUNS_DIR,
-            f'run_oa{oa_deg:.2f}deg_EAB{args.E_AB:.3f}_mu{args.mu:.4f}'
-            f'_kT{args.kT}_r{args.realization:03d}.npz',
-        )
+    # ── Build run directory from simulation parameters ─────────────────────────
+    run_dir = make_run_dir(
+        opening_angle = args.opening_angle,
+        E_AB          = args.E_AB,
+        mu            = args.mu,
+        kT            = args.kT,
+        realization   = args.realization,
+    )
+    os.makedirs(run_dir, exist_ok=True)
+
+    # All output files live inside run_dir
+    output_path     = args.output if args.output else os.path.join(run_dir, 'run.npz')
+    checkpoint_path = None if args.no_checkpoint else os.path.join(run_dir, 'checkpoint.npy')
+    log_path        = os.path.join(run_dir, 'params.txt')
 
     L      = float(np.sqrt(args.box_area))
     params = make_gcmc_params(
@@ -186,7 +194,9 @@ def main():
     print(f'  snapshot every {args.snapshot_interval} sweeps')
     if args.dump_md_energies:
         print(f'  dump_md_energies ON  ({args.md_energy_chunks} chunks/run)')
-    print(f'  output: {args.output}')
+    print(f'  run_dir:    {run_dir}')
+    print(f'  output:     {output_path}')
+    print(f'  checkpoint: {checkpoint_path if checkpoint_path else "disabled"}')
 
     # Initial condition
     print(f'\nGenerating IC: N={args.N_init} via RSA...')
@@ -203,16 +213,18 @@ def main():
         args.mu,
         params,
         rng,
-        n_equil           = args.n_equil,
-        n_prod            = args.n_prod,
-        f_disp            = args.f_disp,
-        MD_STEPS          = args.md_steps,
-        MD_DT             = args.md_dt,
-        GAMMA             = args.gamma,
-        snapshot_interval = args.snapshot_interval,
-        dump_md_energies  = args.dump_md_energies,
-        md_energy_chunks  = args.md_energy_chunks,
-        verbose           = args.verbose,
+        n_equil             = args.n_equil,
+        n_prod              = args.n_prod,
+        f_disp              = args.f_disp,
+        MD_STEPS            = args.md_steps,
+        MD_DT               = args.md_dt,
+        GAMMA               = args.gamma,
+        snapshot_interval   = args.snapshot_interval,
+        dump_md_energies    = args.dump_md_energies,
+        md_energy_chunks    = args.md_energy_chunks,
+        verbose             = args.verbose,
+        checkpoint_file     = checkpoint_path,
+        checkpoint_interval = args.snapshot_interval,
     )
     elapsed = time.time() - t0
 
@@ -244,9 +256,6 @@ def main():
                  np.zeros((0, 0, 3), dtype=np.float32)
 
     # Save
-    out_dir = os.path.dirname(os.path.abspath(args.output))
-    os.makedirs(out_dir, exist_ok=True)
-
     save_dict = dict(
         # Trajectories (every sweep)
         N_traj          = N_traj,
@@ -285,16 +294,16 @@ def main():
         save_dict['md_E_traj'] = results['md_E_traj']
         save_dict['md_energy_chunks'] = np.array([args.md_energy_chunks])
 
-    np.savez_compressed(args.output, **save_dict)
-    print(f'Saved (compressed): {args.output}')
+    np.savez_compressed(output_path, **save_dict)
+    print(f'Saved (compressed): {output_path}')
 
-    # ── Parameter log (human-readable txt alongside the NPZ) ─────────────────
+    # ── Parameter log (human-readable txt inside run_dir) ─────────────────────
     import datetime
-    log_path = args.output.replace('.npz', '_params.txt')
     with open(log_path, 'w') as flog:
         flog.write(f'run_gcmc_hybrid.py  —  parameter log\n')
         flog.write(f'Generated:    {datetime.datetime.now().isoformat()}\n')
-        flog.write(f'Output:       {args.output}\n')
+        flog.write(f'run_dir:      {run_dir}\n')
+        flog.write(f'Output:       {output_path}\n')
         flog.write('─' * 55 + '\n')
         flog.write(f'opening_angle = {args.opening_angle}  ({np.degrees(args.opening_angle):.4f} deg)\n')
         flog.write(f'E_AB          = {args.E_AB}\n')
@@ -324,6 +333,7 @@ def main():
         if len(E_traj) > 0:
             flog.write(f'mean_E_per_N  = {float(np.mean(E_traj / np.maximum(snapshot_N, 1))):.4f}\n')
     print(f'Params log:  {log_path}')
+    print(f'Run dir:     {run_dir}')
 
 
 if __name__ == '__main__':

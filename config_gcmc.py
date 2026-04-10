@@ -69,3 +69,36 @@ MU_SCAN_N      = len(MU_SCAN_VALUES)                  # 20
 
 # ── Conda environment name ────────────────────────────────────────────────────
 CONDA_ENV = 'selfAssemblyIG'
+
+
+# ── Run-directory helper ───────────────────────────────────────────────────────
+
+def make_run_dir(
+    opening_angle: float,
+    E_AB: float,
+    mu: float,
+    kT: float,
+    realization: int = 0,
+    base_dir: str = None,
+) -> str:
+    """
+    Return the path of the per-run subdirectory under GCMC_RUNS_DIR (or
+    *base_dir* if supplied).
+
+    Pattern:
+        <base>/oa<deg>deg_EAB<E_AB>_mu<mu>_kT<kT>_r<rrr>/
+
+    Example:
+        results/gcmc_runs/oa90.00deg_EAB5.000_mu-4.0000_kT1.0_r000/
+    """
+    if base_dir is None:
+        base_dir = GCMC_RUNS_DIR
+    oa_deg = float(np.degrees(opening_angle))
+    name = (
+        f'oa{oa_deg:.2f}deg'
+        f'_EAB{E_AB:.3f}'
+        f'_mu{mu:.4f}'
+        f'_kT{kT}'
+        f'_r{realization:03d}'
+    )
+    return os.path.join(base_dir, name)
