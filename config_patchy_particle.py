@@ -95,7 +95,7 @@ WRITE_EVERY = 10
 # ============================================================================
 
 # Particle count for yield measurement (scaled up from notebook's 20)
-NUM_PARTICLES_YIELD = 1000
+NUM_PARTICLES_YIELD = 3_000
 
 # Simulation length
 NUM_STEPS_YIELD = 100_000
@@ -111,11 +111,11 @@ patch_allowance = PATCH_SIZE * 2 / 3.
 # ============================================================================
 # YIELD SIMULATION PARAMETER GRID
 # ============================================================================
-YIELD_ALPHAS_DEG = np.linspace(70, 115, 10)   # 10 opening angles (degrees)
-YIELD_ZETAS = np.logspace(np.log10(0.1), np.log10(50), 10)  # 10 selectivities (log-spaced)
+YIELD_ALPHAS_DEG = np.linspace(70, 120, 12)   # 10 opening angles (degrees)
+YIELD_ZETAS = np.logspace(np.log10(1), np.log10(50), 6)  # 10 selectivities (log-spaced)
 NUM_YIELD_JOBS = len(YIELD_ALPHAS_DEG) * len(YIELD_ZETAS)   # 100 total jobs
 NUM_REALIZATIONS = 5  # Independent runs per parameter set
-SAMPLE_INTERVAL_YIELD = 1000  # Save trajectory every N steps during production
+SAMPLE_INTERVAL_YIELD = 100  # Save trajectory every N steps during production
 CHECKPOINT_INTERVAL = 10000  # Save checkpoint every N steps during equilibration/production
 
 # ============================================================================

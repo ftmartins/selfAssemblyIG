@@ -104,7 +104,7 @@ def parse_args():
     p.add_argument('--f_disp',          type=float, default=DEFAULT_F_DISP,
                    help=f'Fraction of moves that are MD displacement  (default: {DEFAULT_F_DISP})')
     # IC
-    p.add_argument('--N_init',          type=int,   default=DEFAULT_N_INIT,
+    p.add_argument('--N_init',          type=float,   default=DEFAULT_N_INIT,
                    help=f'Starting particle count for RSA IC  (default: {DEFAULT_N_INIT})')
     p.add_argument('--seed',            type=int,   default=DEFAULT_SEED,
                    help=f'Random seed  (default: {DEFAULT_SEED})')
@@ -170,6 +170,8 @@ def main():
         rep_A         = args.rep_A,
     )
     rng = np.random.default_rng(args.seed)
+   
+    args.N_init = int(args.N_init)
 
     rho_N    = args.N_init / args.box_area
     mu_ideal = args.kT * np.log(rho_N)

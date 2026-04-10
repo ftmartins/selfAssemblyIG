@@ -20,6 +20,7 @@ from __future__ import annotations
 import functools
 from dataclasses import dataclass
 
+from tqdm import tqdm
 import numpy as np
 import jax
 import jax.numpy as jnp
@@ -707,7 +708,7 @@ def run_gcmc(
     snapshot_interval: int = 1,
     dump_md_energies: bool = False,
     md_energy_chunks: int = 10,
-    verbose: bool = False,
+    verbose: bool = True,
 ) -> dict:
     """
     Full GCMC run: equilibration then production.
@@ -754,7 +755,7 @@ def run_gcmc(
     )
 
     # ── Equilibration ──────────────────────────────────────────────────────────
-    for s in range(n_equil):
+    for s in tqdm(range(n_equil)):
         state, _ = mc_sweep(state, L, kT, mu, params, rng, **sweep_kwargs)
         if verbose and (s + 1) % max(1, n_equil // 10) == 0:
             print(f'  equil {s + 1:6d}/{n_equil}  N={state.N}')
@@ -775,7 +776,8 @@ def run_gcmc(
     acc_del_list = []
     md_E_list    = []   # list of (n_chunks,) arrays, one per displacement move
 
-    for s in range(n_prod):
+    print('Before GCMC loop',flush=True)
+    for s in tqdm(range(n_prod)):
         state, stats = mc_sweep(state, L, kT, mu, params, rng, **prod_sweep_kwargs)
         N_traj[s] = state.N
 
@@ -786,6 +788,7 @@ def run_gcmc(
         if stats['nl'] > 0:
             acc_del_list.append(stats['al'] / stats['nl'])
 
+
         if dump_md_energies and stats.get('md_E_trajs'):
             md_E_list.extend(stats['md_E_trajs'])
 
@@ -794,9 +797,9 @@ def run_gcmc(
             E_list.append(np.float32(E_now))
             snap_sweeps.append(s + 1)
             snapshots.append(state.q.copy())
-            if verbose and (s + 1) % max(1, n_prod // 10) == 0:
+            if verbose and (s + 1) % max(1, n_prod // 100) == 0:
                 print(f'  prod  {s + 1:6d}/{n_prod}  N={state.N}  '
-                      f'E/N={E_now/max(state.N,1):.2f}')
+                      f'E/N={E_now/max(state.N,1):.2f}', flush=True)
 
     result = {
         'N_traj'          : N_traj,

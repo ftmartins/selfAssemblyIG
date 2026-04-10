@@ -11,7 +11,7 @@ import os
 import numpy as np
 
 # ── Project root ──────────────────────────────────────────────────────────────
-PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
+PROJECT_ROOT = '/data2/shared/felipetm/selfAssembly/' 
 
 # ── Output directories ────────────────────────────────────────────────────────
 # Results from the mu-scan SLURM array jobs (one NPZ per task)
@@ -24,10 +24,10 @@ GCMC_RUNS_DIR    = os.path.join(PROJECT_ROOT, 'results', 'gcmc_runs')
 PLOTS_DIR        = os.path.join(PROJECT_ROOT, 'results', 'plots')
 
 # SLURM log files
-LOGS_DIR         = os.path.join(PROJECT_ROOT, 'Logs')
+LOGS_DIR         = os.path.join('./', 'Logs')
 
 # ── Box / density defaults ────────────────────────────────────────────────────
-DEFAULT_BOX_AREA    = 1600.0    # L^2 = 40^2
+DEFAULT_BOX_AREA    = 100.0    # L^2 = 40^2
 DEFAULT_TARGET_PHI  = 0.2      # target area fraction for mu* search
 DEFAULT_R_CENTER    = 1.0      # particle core radius (also = r_patch)
 
@@ -64,7 +64,7 @@ DEFAULT_ALPHA_EQUIL = 0.05  # Mann-Whitney p-value threshold
 # ── mu scan grid ──────────────────────────────────────────────────────────────
 # Used by submit_mu_scan.sh and aggregate_mu_scan.py for reference.
 # 20 values from -6.0 to -1.25.
-MU_SCAN_VALUES = list(np.arange(-6.0, -1.0, 0.25))   # [-6.0, -5.75, ..., -1.25]
+MU_SCAN_VALUES = list(np.arange(-6.0, -1.0, 0.5))   # [-6.0, -5.75, ..., -1.25]
 MU_SCAN_N      = len(MU_SCAN_VALUES)                  # 20
 
 # ── Conda environment name ────────────────────────────────────────────────────
