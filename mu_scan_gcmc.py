@@ -78,7 +78,7 @@ def parse_args():
                    help=f'Equilibration sweeps  (default: {DEFAULT_N_EQUIL})')
     p.add_argument('--n_prod',        type=int,   default=DEFAULT_N_PROD,
                    help=f'Production sweeps  (default: {DEFAULT_N_PROD})')
-    p.add_argument('--N_init',        type=int,   default=DEFAULT_N_INIT,
+    p.add_argument('--N_init',        type=float,   default=DEFAULT_N_INIT,
                    help=f'Initial particle count for RSA IC  (default: {DEFAULT_N_INIT})')
     p.add_argument('--f_disp',        type=float, default=DEFAULT_F_DISP,
                    help=f'Fraction of moves that are MD displacement  (default: {DEFAULT_F_DISP})')
@@ -103,6 +103,9 @@ def main():
         rep_A         = args.rep_A,
     )
     rng = np.random.default_rng(args.seed)
+ 
+
+    args.N_init = int(args.N_init)
 
     rho_N    = args.N_init / args.box_area
     mu_ideal = args.kT * np.log(rho_N)
@@ -135,7 +138,7 @@ def main():
         MD_STEPS   = args.md_steps,
         MD_DT      = args.md_dt,
         GAMMA      = args.gamma,
-        snapshot_interval = 1,
+        snapshot_interval = 100,
         verbose    = True,
     )
     elapsed = time.time() - t0
