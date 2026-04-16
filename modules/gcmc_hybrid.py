@@ -371,15 +371,17 @@ def _make_md_runner_diagnostic(
     n_chunks: int,
 ):
     """
-    Like _make_md_runner but also samples energy at n_chunks equally-spaced
-    checkpoints along the MD run.  Uses jax.lax.scan over (n_chunks) chunks
-    of (chunk_size = MD_STEPS // n_chunks) BAOAB steps each.
+    Like _make_md_runner but also samples energy and positions at n_chunks
+    equally-spaced checkpoints along the MD run.  Uses jax.lax.scan over
+    (n_chunks) chunks of (chunk_size = MD_STEPS // n_chunks) BAOAB steps each.
 
     Returns
     -------
     run : callable
-        Signature: run(q_init, v_init, key) -> (q_final, v_final, E_traj)
+        Signature: run(q_init, v_init, key) -> (q_final, v_final, E_traj, q_traj)
         E_traj has shape (n_chunks,), dtype float64.
+        q_traj has shape (n_chunks, N, 3), dtype float64 — positions at each
+        checkpoint (already wrapped by PBC).
 
     Use this only when --dump_md_energies is active; the extra scan overhead
     is not needed in normal production runs.
@@ -410,15 +412,15 @@ def _make_md_runner_diagnostic(
         q, v, F, key = carry
         q, v, F, key = jax.lax.fori_loop(0, chunk_size, baoab_body, (q, v, F, key))
         E = _total_energy_jax(q.flatten(), L, params)
-        return (q, v, F, key), E
+        return (q, v, F, key), (E, q)   # stash both E and q at this checkpoint
 
     @jax.jit
     def run(q_init, v_init, key):
         F0 = _force(q_init)
-        (q_f, v_f, _, _), E_traj = jax.lax.scan(
+        (q_f, v_f, _, _), (E_traj, q_traj) = jax.lax.scan(
             chunk_body, (q_init, v_init, F0, key), None, length=n_chunks,
         )
-        return q_f, v_f, E_traj
+        return q_f, v_f, E_traj, q_traj   # q_traj: (n_chunks, N, 3)
 
     return run
 
@@ -479,20 +481,24 @@ def md_displacement_diagnostic(
     n_chunks: int = 10,
 ) -> tuple:
     """
-    Like md_displacement but also returns the energy sampled at n_chunks
-    equally-spaced checkpoints along the MD run.
+    Like md_displacement but also returns the energy and positions sampled at
+    n_chunks equally-spaced checkpoints along the MD run.
 
     Use to diagnose whether MD_STEPS is long enough: if energy has not
     plateaued by the last checkpoint, increase MD_STEPS.
 
     Returns
     -------
-    (MCMCState, E_traj)
+    (MCMCState, E_traj, q_traj)
         E_traj : np.ndarray, shape (n_chunks,), float32
+        q_traj : np.ndarray, shape (n_chunks, N, 3), float64
+                 Particle positions (PBC-wrapped) at each checkpoint.
     """
     N = state.N
     if N == 0:
-        return state, np.zeros(n_chunks, dtype=np.float32)
+        return (state,
+                np.zeros(n_chunks, dtype=np.float32),
+                np.zeros((n_chunks, 0, 3), dtype=np.float64))
 
     params_frozen = frozenset(params.items())
     run  = _make_md_runner_diagnostic(N, MD_STEPS, MD_DT, GAMMA, kT, L, params_frozen, n_chunks)
@@ -501,11 +507,12 @@ def md_displacement_diagnostic(
     q_j  = jnp.array(state.q, dtype=jnp.float64)
     v_j  = jnp.array(state.v, dtype=jnp.float64)
 
-    q_new_j, v_new_j, E_traj_j = run(q_j, v_j, key)
+    q_new_j, v_new_j, E_traj_j, q_traj_j = run(q_j, v_j, key)
 
     return (
         MCMCState(q=np.array(q_new_j), v=np.array(v_new_j)),
         np.array(E_traj_j, dtype=np.float32),
+        np.array(q_traj_j, dtype=np.float64),   # (n_chunks, N, 3)
     )
 
 
@@ -598,9 +605,10 @@ def mc_sweep(
     Parameters
     ----------
     dump_md_energies : bool
-        If True, record energy at md_energy_chunks checkpoints along each
-        MD displacement run.  Stored in stats['md_E_trajs'] as a list of
-        (md_energy_chunks,) float32 arrays, one per displacement attempt.
+        If True, record energy and positions at md_energy_chunks checkpoints
+        along each MD displacement run.
+        stats['md_E_trajs'] : list of (md_energy_chunks,) float32 arrays
+        stats['md_q_trajs'] : list of (md_energy_chunks, N_i, 3) float64 arrays
     md_energy_chunks : int
         Number of energy checkpoints per MD run (only used when dump_md_energies).
 
@@ -615,24 +623,28 @@ def mc_sweep(
         'al': int,               deletions accepted
         'md_E_trajs': list       (only present when dump_md_energies=True)
             list of (md_energy_chunks,) float32 arrays
+        'md_q_trajs': list       (only present when dump_md_energies=True)
+            list of (md_energy_chunks, N_i, 3) float64 arrays
     }
     """
     n_att = max(state.N, 1)
     stats = {'nd': 0, 'ni': 0, 'nl': 0, 'ad': 0, 'ai': 0, 'al': 0}
     if dump_md_energies:
         stats['md_E_trajs'] = []
+        stats['md_q_trajs'] = []
     f_ins = (1.0 - f_disp) / 2.0
 
     for _ in range(n_att):
         r = rng.random()
         if r < f_disp:
             if dump_md_energies:
-                state, E_traj = md_displacement_diagnostic(
+                state, E_traj, q_traj = md_displacement_diagnostic(
                     state, L, kT, params, rng,
                     MD_STEPS=MD_STEPS, MD_DT=MD_DT, GAMMA=GAMMA,
                     n_chunks=md_energy_chunks,
                 )
                 stats['md_E_trajs'].append(E_traj)
+                stats['md_q_trajs'].append(q_traj)
             else:
                 state = md_displacement(state, L, kT, params, rng,
                                         MD_STEPS=MD_STEPS, MD_DT=MD_DT, GAMMA=GAMMA)
@@ -813,6 +825,10 @@ def run_gcmc(
         'q_final'        : (N_final, 3) float64
         'md_E_traj'      : (n_disp_moves, md_energy_chunks) float32
                            only present when dump_md_energies=True
+        'md_q_traj'      : object array of length n_disp_moves, each entry
+                           shape (md_energy_chunks, N_i, 3) float64 — positions
+                           at each energy checkpoint for that MD move.
+                           only present when dump_md_energies=True
     """
     ckpt_interval = checkpoint_interval if checkpoint_interval is not None else snapshot_interval
 
@@ -842,6 +858,7 @@ def run_gcmc(
         acc_ins_list = list(ckpt['acc_ins_list'])
         acc_del_list = list(ckpt['acc_del_list'])
         md_E_list    = list(ckpt['md_E_list']) if ckpt['md_E_list'].size > 0 else []
+        md_q_list    = []   # MD position trajectories are not checkpointed (too large)
     else:
         start_phase  = 'eq'
         start_sweep  = 0
@@ -853,6 +870,7 @@ def run_gcmc(
         acc_ins_list = []
         acc_del_list = []
         md_E_list    = []
+        md_q_list    = []
 
     eq_start   = start_sweep if start_phase == 'eq'   else n_equil
     prod_start = start_sweep if start_phase == 'prod' else 0
@@ -890,6 +908,7 @@ def run_gcmc(
 
         if dump_md_energies and stats.get('md_E_trajs'):
             md_E_list.extend(stats['md_E_trajs'])
+            md_q_list.extend(stats['md_q_trajs'])
 
         if (s + 1) % snapshot_interval == 0:
             E_now = total_energy_pbc(state.q, L, params)
@@ -922,6 +941,10 @@ def run_gcmc(
         result['md_E_traj'] = (
             np.array(md_E_list, dtype=np.float32) if md_E_list
             else np.zeros((0, md_energy_chunks), dtype=np.float32)
+        )
+        result['md_q_traj'] = (
+            np.array(md_q_list, dtype=object) if md_q_list
+            else np.empty(0, dtype=object)
         )
     return result
 

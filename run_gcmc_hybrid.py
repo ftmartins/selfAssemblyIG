@@ -296,6 +296,18 @@ def main():
     np.savez_compressed(output_path, **save_dict)
     print(f'Saved (compressed): {output_path}')
 
+    # ── MD position trajectories (separate file — can be large) ──────────────
+    if args.dump_md_energies and 'md_q_traj' in results and len(results['md_q_traj']) > 0:
+        md_traj_path = os.path.join(run_dir, 'md_trajectories.npy')
+        # Dict structure: {'MD_trajectories': {i: (n_chunks, N_i, 3) float64}}
+        np.save(
+            md_traj_path,
+            {'MD_trajectories': {i: q for i, q in enumerate(results['md_q_traj'])}},
+            allow_pickle=True,
+        )
+        print(f'MD trajectories: {md_traj_path}  '
+              f'({len(results["md_q_traj"])} moves × {args.md_energy_chunks} checkpoints)')
+
     # ── Parameter log (human-readable txt inside run_dir) ─────────────────────
     import datetime
     with open(log_path, 'w') as flog:
