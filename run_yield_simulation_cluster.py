@@ -131,8 +131,8 @@ def detect_clusters(positions, orientations, r_patch, opening_angle,
     orientations = np.asarray(orientations)
 
     # Compute patch positions
-    angle_A = orientations - opening_angle / 2
-    angle_B = orientations + opening_angle / 2
+    angle_A = orientations                    # patch A at body orientation
+    angle_B = orientations + opening_angle    # patch B at body orientation + opening_angle
 
     patches_A = positions + r_patch * np.column_stack([np.cos(angle_A), np.sin(angle_A)])
     patches_B = positions + r_patch * np.column_stack([np.cos(angle_B), np.sin(angle_B)])

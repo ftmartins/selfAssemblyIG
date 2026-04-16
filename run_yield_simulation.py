@@ -274,31 +274,18 @@ def regular_ngon_reference(n, R=1.0, opening_angle_deg=100.0):
 
     for i in range(n):
         i_prev = (i - 1) % n
-        i_next = (i + 1) % n
 
         v_prev = positions[i_prev] - positions[i]
-        v_next = positions[i_next] - positions[i]
 
         beta_prev = np.arctan2(v_prev[1], v_prev[0])
-        beta_next = np.arctan2(v_next[1], v_next[0])
 
-        avg_vec = np.array([
-            np.cos(beta_prev) + np.cos(beta_next),
-            np.sin(beta_prev) + np.sin(beta_next),
-        ])
-        avg_beta = np.arctan2(avg_vec[1], avg_vec[0])
-
-        theta_i = avg_beta
+        # Canonical convention: patch A at body-frame 0 (lab angle = theta_i = beta_prev),
+        # patch B at body-frame alpha (lab angle = theta_i + alpha).
+        theta_i = beta_prev   # body orientation = direction of patch A = toward prev particle
         orientations[i] = theta_i
 
-        patch_to_prev = theta_i - alpha / 2.0
-        patch_to_next = theta_i + alpha / 2.0
-
-        patch_to_prev = (patch_to_prev + np.pi) % (2.0 * np.pi) - np.pi
-        patch_to_next = (patch_to_next + np.pi) % (2.0 * np.pi) - np.pi
-
-        patch_angles[i, 0] = patch_to_prev
-        patch_angles[i, 1] = patch_to_next
+        patch_angles[i, 0] = 0.0    # patch A in body frame
+        patch_angles[i, 1] = alpha  # patch B in body frame
 
     return positions, orientations, patch_angles
 
@@ -515,7 +502,7 @@ def count_polygons(state, params, box_size, patch_allowance=None, cluster_check=
 
     # Compute patch positions
     opening_angle = params[1]
-    patch_angles_local = np.array([-opening_angle/2, opening_angle/2])
+    patch_angles_local = np.array([0.0, opening_angle])
 
     patches_pos = [[], []]
     for i in range(len(center_pos)):

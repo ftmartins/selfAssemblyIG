@@ -27,6 +27,8 @@ import jax
 import jax.numpy as jnp
 from jax import config as _jcfg
 
+from tqdm import tqdm
+
 from config_patchy_particle import PATCH_SIZE, ALPHA
 
 # Enable 64-bit JAX once at import time (idempotent)
