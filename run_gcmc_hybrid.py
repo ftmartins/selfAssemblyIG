@@ -26,8 +26,7 @@ python run_gcmc_hybrid.py \\
     --mu -4.0 \\
     --n_equil 20000 \\
     --n_prod 10000 \\
-    --output results/gcmc_runs/run.npz \\
-    --verbose
+    --output results/gcmc_runs/run.npz
 
 Add --dump_md_energies to also record energy along each MD segment.
 """
@@ -128,8 +127,8 @@ def parse_args():
     p.add_argument('--md_energy_chunks', type=int, default=10,
                    help='Number of energy checkpoints per MD run  '
                         '(only used with --dump_md_energies, default: 10)')
-    p.add_argument('--verbose',         action='store_true',
-                   help='Print progress during simulation')
+    p.add_argument('--quiet',           action='store_true',
+                   help='Suppress per-sweep progress output')
     return p.parse_args()
 
 
@@ -222,7 +221,7 @@ def main():
         snapshot_interval   = args.snapshot_interval,
         dump_md_energies    = args.dump_md_energies,
         md_energy_chunks    = args.md_energy_chunks,
-        verbose             = args.verbose,
+        verbose             = not args.quiet,
         checkpoint_file     = checkpoint_path,
         checkpoint_interval = args.snapshot_interval,
     )
