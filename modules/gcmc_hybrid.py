@@ -705,6 +705,22 @@ def generate_ic(
     return MCMCState(q=q, v=v)
 
 
+# ── Utility ──────────────────────────────────────────────────────────────────
+
+def _to_object_array(lst: list) -> np.ndarray:
+    """
+    Convert a list of numpy arrays to a 1-D object array.
+
+    np.array(lst, dtype=object) is ambiguous when every element has the same
+    shape: numpy may attempt a dense N+1-D array and raise a ValueError.
+    This function always produces a 1-D object array of length len(lst).
+    """
+    arr = np.empty(len(lst), dtype=object)
+    for i, x in enumerate(lst):
+        arr[i] = x
+    return arr
+
+
 # ── Checkpoint helpers ────────────────────────────────────────────────────────
 
 def save_checkpoint(
@@ -732,7 +748,7 @@ def save_checkpoint(
         N_traj_partial = N_traj_partial.copy(),
         E_list         = np.array(E_list, dtype=np.float32),
         snap_sweeps    = np.array(snap_sweeps, dtype=np.int32),
-        snapshots      = np.array(snapshots, dtype=object),
+        snapshots      = _to_object_array(snapshots),
         acc_md_list    = np.array(acc_md_list),
         acc_ins_list   = np.array(acc_ins_list),
         acc_del_list   = np.array(acc_del_list),
@@ -942,10 +958,7 @@ def run_gcmc(
             np.array(md_E_list, dtype=np.float32) if md_E_list
             else np.zeros((0, md_energy_chunks), dtype=np.float32)
         )
-        result['md_q_traj'] = (
-            np.array(md_q_list, dtype=object) if md_q_list
-            else np.empty(0, dtype=object)
-        )
+        result['md_q_traj'] = _to_object_array(md_q_list) if md_q_list else np.empty(0, dtype=object)
     return result
 
 

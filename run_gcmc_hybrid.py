@@ -11,6 +11,7 @@ Output (compressed binary NPZ)
 N_traj          : (n_prod,) int32      — particle count every production sweep
 E_traj          : (n_snapshots,) f32   — total energy at snapshot times
 snapshot_sweeps : (n_snapshots,) int32 — production sweep of each snapshot
+snapshots       : object array of length n_snapshots — raw variable-length frames
 snapshot_q      : (n_snapshots, max_N, 3) f32 — positions+orientations, NaN-padded
 snapshot_N      : (n_snapshots,) int32 — particle count at each snapshot
 q_final         : (N_final, 3) f64    — final positions+orientations
@@ -124,9 +125,9 @@ def parse_args():
     p.add_argument('--dump_md_energies', action='store_true',
                    help='Record energy at checkpoints along each MD run.  '
                         'Use to verify MD_STEPS is long enough for equilibration.')
-    p.add_argument('--md_energy_chunks', type=int, default=10,
+    p.add_argument('--md_energy_chunks', type=int, default=5000,
                    help='Number of energy checkpoints per MD run  '
-                        '(only used with --dump_md_energies, default: 10)')
+                        '(only used with --dump_md_energies, default: 5000)')
     p.add_argument('--quiet',           action='store_true',
                    help='Suppress per-sweep progress output')
     return p.parse_args()
@@ -261,6 +262,7 @@ def main():
         # Snapshots (every snapshot_interval sweeps)
         E_traj          = E_traj,
         snapshot_sweeps = snap_sweeps,
+        snapshots       = np.array(snapshots, dtype=object),
         snapshot_q      = snapshot_q,   # (n_snap, max_N, 3) float32, NaN-padded
         snapshot_N      = snapshot_N,   # (n_snap,) int32 — real particle count per frame
         # Final state
