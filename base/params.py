@@ -9,8 +9,6 @@ Parameter containers shared by the simulation engines.
   the MD-runner LRU cache).
 """
 
-import numpy as np
-
 from base.config import ALPHA, PATCH_SIZE
 
 

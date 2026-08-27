@@ -19,7 +19,6 @@ Three flavours live here:
 """
 
 import numpy as np
-import jax
 import jax.numpy as jnp
 from jax_md import space, energy as jmd_energy, rigid_body
 
