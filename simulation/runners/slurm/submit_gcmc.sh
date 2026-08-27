@@ -1,7 +1,7 @@
 #!/bin/sh
-# submit_gcmc_hybrid.sh — SLURM 3-D array: opening_angle × E_AB × realization.
+# submit_gcmc.sh — SLURM 3-D array: opening_angle × E_AB × realization.
 #
-# Runs run_gcmc_hybrid.py for every combination in the parameter grid,
+# Runs simulation/runners/run_gcmc.py for every combination in the parameter grid,
 # with N_REAL independent realizations per combination.
 #
 # Task mapping (innermost index varies fastest):
@@ -14,11 +14,11 @@
 #   Total tasks = N_ANGLES * N_EAB * N_REAL  (currently 10 * 6 * 5 = 300 → --array=0-299)
 #
 # Provide --mu for each submission; find mu* first with the mu-scan workflow:
-#   sbatch submit_mu_scan.sh
-#   python aggregate_mu_scan.py --E_AB X --opening_angle Y
+#   sbatch simulation/runners/slurm/submit_mu_scan.sh
+#   python analysis/aggregate_mu_scan.py --E_AB X --opening_angle Y
 #
 # Usage:
-#   MU=-4.0 sbatch submit_gcmc_hybrid.sh      # pass mu as environment variable
+#   MU=-4.0 sbatch simulation/runners/slurm/submit_gcmc.sh      # pass mu as environment variable
 #   or edit MU directly below
 #
 #SBATCH -t 7-00:00:00
@@ -35,7 +35,7 @@
 #SBATCH --error=Logs/GCMCHybrid_%A_%a.err
 
 # ── Chemical potential (find with aggregate_mu_scan.py) ───────────────────────
-# Can override at submission time:  MU=-4.5 sbatch submit_gcmc_hybrid.sh
+# Can override at submission time:  MU=-4.5 sbatch ./submit_gcmc.sh
 MU=${MU:--4.0}          # default -4.0 if not set in environment
 
 # ── Fixed simulation parameters ───────────────────────────────────────────────
@@ -53,7 +53,7 @@ MD_DT=0.01              # Langevin time step
 GAMMA=1.0               # Langevin friction coefficient
 
 # ── Opening angle grid  [deg → rad conversion happens below] ─────────────────
-# Matches config_patchy_particle YIELD_ALPHAS_DEG = np.linspace(70, 115, 10)
+# Matches base.grids GCMC_ANGLES_DEG
 # Update --array upper bound when changing: new_upper = N_ANGLES * N_EAB * N_REAL - 1
 ANGLES_DEG=(70.0 75.0 80.0 85.0 90.0 95.0 100.0 105.0 110.0 115.0)
 N_ANGLES=10
@@ -119,7 +119,6 @@ python simulation/runners/run_gcmc.py \
     --md_steps         ${MD_STEPS}         \
     --md_dt            ${MD_DT}            \
     --gamma            ${GAMMA}            \
-    --realization      ${REAL_IDX}         \
-    --verbose
+    --realization      ${REAL_IDX}
 
 echo "Task ${SLURM_ARRAY_TASK_ID} finished at $(date)"

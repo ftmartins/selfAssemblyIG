@@ -1,327 +1,110 @@
-# Patchy Particle Optimization System
+# Patchy-particle self-assembly
 
-A modular Python system for optimizing patchy particle parameters for target shape assembly and measuring polygon yields through large-scale simulations.
+Simulate the self-assembly of 2-patch patchy particles in the **grand-canonical
+(µVT)** and **canonical (NVT)** ensembles, and analyze the resulting runs.
 
-## Overview
+## Layout
 
-This system provides:
-- **Optimization**: Gradient-based optimization of 2-patch particle parameters for square or triangle assembly
-- **Yield Measurement**: Large-scale simulations to count polygon formation and calculate yields
-- **Modular Design**: Clean separation between configuration, core modules, and executable scripts
-
-**Key Feature**: The opening angle between patches is **optimized via gradient descent**, not fixed!
-
-## Folder Structure
+Three code layers (see `docs/repository_organization.md` for the model and
+`docs/migration_notes.md` for the old→new map):
 
 ```
-selfAssemblyPatchyParticles/
-├── config_patchy_particle.py       # All global constants and parameters
-├── optimize_patchy_particles.py     # Main optimization script
-├── run_yield_simulation.py          # Yield calculation script
-├── requirements.txt                 # Python dependencies
-├── optimal_params/                  # Optimization results (auto-created)
-├── modules/                         # Core functionality
-│   ├── __init__.py
-│   ├── utility_functions.py        # Simulation infrastructure
-│   ├── evaluation_functions.py     # Loss and cluster detection
-│   └── optimizer.py                # Optimization algorithms
-└── README.md                        # This file
+base/                    shared primitives — importable with zero side effects
+  config.py              physical constants (ALPHA, PATCH_SIZE, CENTER_RADIUS, kT, …)
+  jax_setup.py           configure_jax(x64=True, debug_nans=False)  — call explicitly
+  geometry.py            thetas_to_shape, energy_matrix, patch_positions,
+                         regular_ngon_reference, get_shape
+  energy.py              free-space total_energy; periodic params-dict energies;
+                         build_pair_energy_fn (JAX-MD soft-sphere + Morse)
+  params.py              SimpleParams, generate_parameter_grid, make_gcmc_params
+  grids.py               YIELD_* / MU_SCAN_* grids + job_id ↔ params mappings
+  paths.py               repo-root-relative data/plot dirs, make_gcmc_run_dir
+  initial_conditions.py  rsa_2d (one RSA), random_uniform_ic
+  structure_detection.py bond-graph clustering + freud count_polygons
+  io.py                  pickle-npy + rename_with_backup
+
+simulation/
+  src/
+    gcmc.py              hybrid GCMC (µVT) engine: MCMCState, mc_sweep, run_gcmc
+    canonical_md.py      NVT Nose-Hoover drivers: run_sim/my_sim (rigid body),
+                         run_many_particle_md (chunked + checkpointed),
+                         md_relax_system
+    design.py            DesignConfig + make_loss_fns + optimize / random_search
+  runners/               thin CLI entrypoints (each: sys.path + configure_jax)
+    run_gcmc.py  scan_mu.py  run_yield.py  run_yield_cluster.py
+    optimize_design.py  make_initial_condition.py  preview_grid.py
+    slurm/              SLURM array wrappers
+
+analysis/
+  mu_scan.py             equilibration test, per-mu aggregation, mu* finder
+  yields.py              (opening angle, selectivity) yield-grid assembly
+  gcmc_runs.py           discover / parse / load run.npz directories
+  plotting.py            all matplotlib figure functions
+  aggregate_mu_scan.py   CLI wrapper
+  notebooks/             one notebook per analysis theme
+
+benchmarks/              timestep_comparison.py (MD dt convergence)
+data/                    generated results (git-ignored)
+plots/                   generated figures (git-ignored)
+docs/                    design notes + migration map
 ```
 
-## Installation
+`simulation/` and `analysis/` both depend only on `base/`, never on each other.
 
-### Prerequisites
-- Python 3.8+
-- CUDA-capable GPU (recommended for JAX acceleration)
+## Environment
 
-### Setup
+```bash
+conda env create -f environment.yml    # env: patchy_particles  (Python 3.11,
+                                       # numpy/scipy/matplotlib, freud, jax, jax-md)
+conda activate patchy_particles
+```
 
-1. **Clone or navigate to this directory**:
-   ```bash
-   cd selfAssemblyPatchyParticles
-   ```
-
-2. **Install dependencies**:
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-   Key dependencies:
-   - JAX & JAX-MD: Differentiable molecular dynamics
-   - freud-analysis: Cluster detection
-   - NumPy, SciPy, Matplotlib: Numerical computing and visualization
+`docs/selfAssembly.yml` is the pinned cluster lockfile (env `selfAssemblyIG`).
 
 ## Usage
 
-### 1. Optimization
+Run everything from the repo root.
 
-Optimize patchy particle parameters for a target shape (square or triangle):
-
-```bash
-# Square optimization
-python optimize_patchy_particles.py --shape square
-
-# Triangle optimization
-python optimize_patchy_particles.py --shape triangle
-```
-
-**Command-line options**:
-- `--shape`: Target shape (`square` or `triangle`) **[required]**
-- `--max_energy`: Maximum bond energy (default: 30.0)
-- `--batch_size`: Batch size for optimization (default: 64)
-- `--opt_steps`: Steps per optimization stage (default: 100)
-- `--output_dir`: Output directory (default: `optimal_params/`)
-
-**What it does**:
-1. **Random Search**: Initializes parameters via random search
-2. **Three-Stage Optimization**:
-   - Stage 1: Coarse search (LR=0.5, ~17 steps)
-   - Stage 2: Medium refinement (LR=0.1, ~3 steps)
-   - Stage 3: Fine refinement (LR=0.05, ~3 steps)
-3. **Saves Results**:
-   - `{shape}_params_{timestamp}.npz`: Binary parameter file
-   - `{shape}_summary_{timestamp}.txt`: Human-readable summary
-
-**Example output**:
-```
-optimal_params/
-├── square_params_20251205_143022.npz
-└── square_summary_20251205_143022.txt
-```
-
-### 2. Yield Simulation
-
-Run large-scale simulation to measure polygon yields from optimized parameters:
+### Grand-canonical (µVT)
 
 ```bash
-# Basic usage
-python run_yield_simulation.py --params optimal_params/square_params_20251205_143022.npz
+# find mu* for a target area fraction: a mu-scan then aggregate
+sbatch simulation/runners/slurm/submit_mu_scan.sh
+python analysis/aggregate_mu_scan.py --input_dir data/mu_scan --E_AB 5 --opening_angle 1.5708
 
-# Custom particle count
-python run_yield_simulation.py --params optimal_params/square_params_*.npz --num_particles 200
+# full run at a chosen mu
+python simulation/runners/run_gcmc.py \
+    --opening_angle 1.5708 --E_AB 5.0 --mu -4.0 --n_equil 20000 --n_prod 10000
+# → data/gcmc_runs/oa90.00deg_EAB5.000_mu-4.0000_kT1.0_r000/run.npz
 
-# Shorter simulation for testing
-python run_yield_simulation.py --params optimal_params/triangle_params_*.npz --num_steps 10000
+# phase-diagram sweep
+MU=-4.0 sbatch simulation/runners/slurm/submit_gcmc.sh
 ```
 
-**Command-line options**:
-- `--params`: Path to optimized parameters NPZ file **[required]**
-- `--num_particles`: Number of particles (default: 100)
-- `--num_steps`: Simulation steps (default: 40,000)
-- `--output_dir`: Output directory (default: `yield_results/`)
+### Canonical (NVT) yield
 
-**What it does**:
-1. Loads optimized parameters from NPZ file
-2. Runs long simulation with specified particle count
-3. Uses freud clustering to detect polygons (triangles, squares, pentagons, hexagons)
-4. Calculates yields as fraction of particles in each polygon type
-5. Saves comprehensive results
-
-**Example output**:
-```
-Polygon counts:
-  Triangle  : 5
-  Square    : 18
-  Pentagon  : 1
-  Hexagon   : 0
-  Monomers  : 6
-
-Yields (as fraction of particles):
-  Triangle  : 0.1500 (15.00%)
-  Square    : 0.7200 (72.00%)
-  Pentagon  : 0.0500 (5.00%)
-  Hexagon   : 0.0000 (0.00%)
-  Monomers  : 0.0600 (6.00%)
-```
-
-## Configuration
-
-Edit `config_patchy_particle.py` to customize:
-
-### Particle Properties
-```python
-NUM_PATCHES = 2          # Number of patches per particle
-CENTER_RADIUS = 1.0      # Particle radius
-ALPHA = 7                # Morse potential decay
-kT = 1.0                 # Temperature
-```
-
-### Optimization Parameters
-```python
-NUM_PARTICLES_OPT = 16   # Particles during optimization
-BATCH_SIZE = 64          # Batch size
-LEARNING_RATES = [0.5, 0.1, 0.05]  # Three-stage LRs
-MAX_ENERGY = 30.0        # Maximum bond energy
-```
-
-### Yield Simulation Parameters
-```python
-NUM_PARTICLES_YIELD = 100  # Particles for yield measurement
-NUM_STEPS_YIELD = 40_000   # Simulation length
-DENSITY = 0.2              # System density
-```
-
-## Opening Angle Optimization
-
-**CRITICAL**: The opening angle between patches is **OPTIMIZED**, not fixed!
-
-- **Parameter structure**: `params = [theta_1, E_RR, E_RB, E_BB]`
-  - `theta_1`: Opening angle (0 to π) - **OPTIMIZED**
-  - `E_RR, E_RB, E_BB`: Bond interaction energies - **OPTIMIZED**
-
-- **How it works**:
-  - `theta_0` is fixed to 0 (reference patch)
-  - `theta_1` is initialized randomly via random search
-  - Gradient descent adjusts `theta_1` to minimize loss
-  - Loss function naturally guides optimization toward optimal opening angle
-
-- **Results**: The optimized opening angle will differ for squares vs. triangles based on geometric requirements for stable assembly
-
-## Output File Formats
-
-### Optimization Output (`optimal_params/`)
-
-**NPZ file** (`{shape}_params_{timestamp}.npz`):
-```python
-{
-    'shape': str,                    # Target shape
-    'final_params': array,           # Optimized parameters
-    'min_params_stage1/2/3': array,  # Best loss params per stage
-    'cluster_params_stage1/2/3': array,  # Best cluster params per stage
-    'num_patches': int,
-    'max_energy': float,
-    'batch_size': int,
-    'learning_rates': list,
-    'optimizer': str
-}
-```
-
-**Text summary** (`{shape}_summary_{timestamp}.txt`):
-- Target shape and timestamp
-- Final optimized parameters
-- Parameter breakdown (angles in degrees)
-- Opening angle explicitly highlighted
-
-### Yield Output (`yield_results/`)
-
-**NPZ file** (`{shape}_yields_{timestamp}.npz`):
-```python
-{
-    'shape': str,
-    'yields': dict,              # {poly_type: yield_fraction}
-    'polygon_counts': dict,      # {poly_type: count}
-    'num_particles': int,
-    'num_steps': int,
-    'box_size': float,
-    'optimized_params': array,
-    'final_centers': array,      # Particle positions
-    'final_orientations': array  # Particle orientations
-}
-```
-
-**Text summary** (`{shape}_yield_summary_{timestamp}.txt`):
-- Simulation parameters
-- Polygon counts
-- Yields as percentages
-
-## Advanced Usage
-
-### Custom Optimization Schedule
-
-Modify `OPT_STAGE_STEPS` in `config_patchy_particle.py`:
-```python
-OPT_STAGE_STEPS = [
-    OPT_STEPS // 6,   # Stage 1 steps
-    OPT_STEPS // 30,  # Stage 2 steps
-    OPT_STEPS // 30,  # Stage 3 steps
-]
-```
-
-### Accessing Results Programmatically
-
-```python
-import numpy as np
-
-# Load optimization results
-data = np.load('optimal_params/square_params_20251205_143022.npz')
-optimized_params = data['final_params']
-opening_angle_deg = np.rad2deg(optimized_params[0])
-bond_energies = optimized_params[1:]
-
-# Load yield results
-yields_data = np.load('yield_results/square_yields_20251205_143530.npz',
-                      allow_pickle=True)
-polygon_counts = yields_data['polygon_counts'].item()
-yields = yields_data['yields'].item()
-```
-
-## Troubleshooting
-
-### Import Errors
-If you get module import errors, ensure you're running scripts from the `selfAssemblyPatchyParticles` directory:
 ```bash
-cd selfAssemblyPatchyParticles
-python optimize_patchy_particles.py --shape square
+python simulation/runners/preview_grid.py            # job_id ↔ (alpha, zeta)
+sbatch simulation/runners/slurm/submit_yield.sh      # SLURM array
 ```
 
-### GPU Memory Issues
-If JAX runs out of GPU memory:
-1. Reduce `BATCH_SIZE` in `config_patchy_particle.py`
-2. Reduce `NUM_PARTICLES_YIELD` for yield simulations
-3. Force CPU usage: `export JAX_PLATFORM_NAME=cpu`
+### Patch-parameter design
 
-### Slow Optimization
-First step takes longer due to JIT compilation. Subsequent steps are much faster.
-Expected times (on GPU):
-- First optimization step: 30-60 seconds
-- Subsequent steps: 5-10 seconds each
+```bash
+python simulation/runners/optimize_design.py --shape square
+# → data/design/square_params_YYYYMMDD_HHMMSS.npz
+python simulation/runners/run_yield.py --params data/design/square_params_*.npz
+```
 
-## Technical Details
+### Analysis
 
-### Three-Stage Optimization
+Open the notebooks under `analysis/notebooks/` (run with the working directory
+set to that folder — the first cell adds the repo root to `sys.path`).
 
-The optimization uses a coarse-to-fine strategy:
+## Notes
 
-1. **Stage 1 (Coarse)**: Large learning rate (0.5), ~17 steps
-   - Explores parameter space broadly
-   - Identifies promising regions
-
-2. **Stage 2 (Medium)**: Medium learning rate (0.1), ~3 steps
-   - Refines parameters from Stage 1
-   - Uses `cluster_params` (best cluster formation) as starting point
-
-3. **Stage 3 (Fine)**: Small learning rate (0.05), ~3 steps
-   - Final refinement
-   - Converges to optimal parameters
-
-Between stages, we use `cluster_params` (parameters with highest cluster count) rather than `min_loss_params` because cluster formation better indicates successful assembly.
-
-### Polygon Detection
-
-Polygon counting uses a multi-step process:
-
-1. **Patch Position Calculation**: Compute world-frame positions of all patches
-2. **Freud Clustering**: Identify spatial clusters of patches within distance threshold
-3. **Cluster Validation**: For each cluster:
-   - Check size matches target polygon (3, 4, 5, or 6 particles)
-   - Compare pairwise distance matrix to reference polygon
-   - Accept if shape loss < threshold (default: 0.5)
-4. **Yield Calculation**: `yield = (polygon_count × n_vertices) / total_particles`
-
-## Citation
-
-If you use this code in your research, please cite:
-- JAX-MD: https://github.com/google/jax-md
-- freud: https://freud.readthedocs.io
-
-## License
-
-This software is provided as-is for research purposes.
-
-## Contact
-
-For questions or issues, please contact the research group or open an issue in the project repository.
-
----
-
-**Last Updated**: December 2025
+- `jax_debug_nans` is **off** by default now; pass
+  `configure_jax(debug_nans=True)` when chasing a NaN.
+- No global mutable state: particle count / box size are explicit arguments
+  everywhere.  See `docs/migration_notes.md` for the full list of behavioural
+  changes.

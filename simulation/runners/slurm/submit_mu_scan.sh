@@ -1,9 +1,9 @@
 #!/bin/sh
 # submit_mu_scan.sh — SLURM 2-D array: mu × E_AB.
 #
-# Each task runs mu_scan_gcmc.py for one (mu, E_AB) pair in parallel.
+# Each task runs simulation/runners/scan_mu.py for one (mu, E_AB) pair in parallel.
 # Opening angle is fixed per submission; submit separately for each angle.
-# Aggregate afterwards with aggregate_mu_scan.py --E_AB X --opening_angle Y.
+# Aggregate afterwards with analysis/aggregate_mu_scan.py --E_AB X --opening_angle Y.
 #
 # Task mapping:
 #   eab_idx = SLURM_ARRAY_TASK_ID % N_EAB
@@ -14,7 +14,7 @@
 #   Total tasks = N_MU * N_EAB  (currently 20 * 6 = 120 → --array=0-119)
 #
 # Usage:
-#   sbatch submit_mu_scan.sh
+#   sbatch simulation/runners/slurm/submit_mu_scan.sh
 #
 #SBATCH -t 7-00:00:00
 #SBATCH --qos=low

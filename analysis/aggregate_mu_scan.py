@@ -19,9 +19,14 @@ import numpy as np
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from base.paths import MU_SCAN_DIR, PLOTS_DIR
-from simulation.src.gcmc import DEFAULTS
 from analysis.mu_scan import aggregate_by_mu, find_mu_star
 from analysis.plotting import plot_mu_scan
+
+# GCMC-run reference defaults (kept in sync with simulation.src.gcmc.GcmcDefaults)
+DEFAULT_BOX_AREA = 100.0
+DEFAULT_TARGET_PHI = 0.2
+DEFAULT_R_CENTER = 1.0
+DEFAULT_ALPHA_EQUIL = 0.05
 
 
 def parse_args():
@@ -30,10 +35,10 @@ def parse_args():
     p.add_argument('--E_AB', type=float, default=None)
     p.add_argument('--opening_angle', type=float, default=None)
     p.add_argument('--tol', type=float, default=1e-3)
-    p.add_argument('--box_area', type=float, default=DEFAULTS.box_area)
-    p.add_argument('--target_phi', type=float, default=DEFAULTS.target_phi)
-    p.add_argument('--r_center', type=float, default=DEFAULTS.r_center)
-    p.add_argument('--alpha_equil', type=float, default=DEFAULTS.alpha_equil)
+    p.add_argument('--box_area', type=float, default=DEFAULT_BOX_AREA)
+    p.add_argument('--target_phi', type=float, default=DEFAULT_TARGET_PHI)
+    p.add_argument('--r_center', type=float, default=DEFAULT_R_CENTER)
+    p.add_argument('--alpha_equil', type=float, default=DEFAULT_ALPHA_EQUIL)
     p.add_argument('--plot_output', type=str, default=None)
     p.add_argument('--no_plot', action='store_true')
     return p.parse_args()
