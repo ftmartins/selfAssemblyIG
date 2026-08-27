@@ -14,8 +14,10 @@ Two independent detectors:
 import numpy as np
 from scipy.spatial.distance import pdist, squareform
 
-from base.config import CENTER_RADIUS, PATCH_SIZE, NUM_PATCHES
-from base.geometry import patch_positions, regular_ngon_reference, NGON_SIZES
+from base.config import CENTER_RADIUS, PATCH_SIZE
+from base.geometry import (
+    patch_positions, regular_ngon_reference, NGON_SIZES, patch_separation,
+)
 
 STRUCTURES = ['triangle', 'square', 'pentagon', 'hexagon', 'heptagon', 'octagon']
 BOND_THRESHOLD = 0.5
@@ -126,6 +128,29 @@ def shape_match_loss(cluster_centers, ref_shape) -> float:
 
 # ── freud spatial clustering + shape validation ────────────────────────────
 
+def freud_ngon_candidates(patch_clouds, box_size, max_dist, ref_size, r_min=0.001):
+    """
+    Sorted index-tuples that form a size-``ref_size`` freud cluster in **any** of
+    the patch point clouds.
+
+    ``patch_clouds`` — list of ``(M, 2)`` arrays (one per patch type), all with
+    the same row order (row ``k`` = particle ``k``).  ``freud`` is imported
+    lazily so importing this module never requires it.
+    """
+    import freud
+    box = freud.box.Box(box_size, box_size, is2D=True)
+    candidates = set()
+    for cloud in patch_clouds:
+        cloud = np.asarray(cloud)
+        pts = np.hstack((cloud, np.zeros((len(cloud), 1))))
+        cl = freud.cluster.Cluster()
+        cl.compute((box, pts), neighbors={'r_max': max_dist, 'r_min': r_min})
+        for c in cl.cluster_keys:
+            if len(c) == ref_size:
+                candidates.add(tuple(sorted(int(x) for x in c)))
+    return candidates
+
+
 def count_polygons(centers, orientations, opening_angle, box_size,
                    patch_allowance=PATCH_ALLOWANCE, cluster_check=0.5):
     """
@@ -133,16 +158,9 @@ def count_polygons(centers, orientations, opening_angle, box_size,
     patch point clouds, validated by :func:`shape_match_loss` against the ideal
     n-gon.  Returns a dict ``{name: count}`` including ``'monomers'``.
     """
-    import freud  # lazy — keeps base importable without freud
-
     centers = np.asarray(centers)
-    orientations = np.asarray(orientations)
-
-    pA, pB = patch_positions(centers, orientations, opening_angle, CENTER_RADIUS)
-    patches_pos = [np.asarray(pA), np.asarray(pB)]
-
-    patch_dists = abs(2 * CENTER_RADIUS * np.sin(opening_angle / 2.0))
-    box = freud.box.Box(box_size, box_size, is2D=True)
+    pA, pB = patch_positions(centers, np.asarray(orientations), opening_angle, CENTER_RADIUS)
+    max_dist = patch_separation(opening_angle) + patch_allowance
 
     counts = {name: 0 for name in STRUCTURES}
     counts['monomers'] = 0
@@ -151,28 +169,15 @@ def count_polygons(centers, orientations, opening_angle, box_size,
 
     for name in STRUCTURES:
         ref_cl_size = NGON_SIZES[name]
-        radius = 1.0 / np.sin(np.pi / ref_cl_size)
-        ref_shape = regular_ngon_reference(ref_cl_size, R=radius,
-                                           opening_angle_rad=opening_angle)[0]
-        max_dist = patch_dists + patch_allowance
-
-        patch_clusters = []
-        for k in range(NUM_PATCHES):
-            pts = np.hstack((patches_pos[k], np.zeros((len(patches_pos[k]), 1))))
-            cl = freud.cluster.Cluster()
-            cl.compute((box, pts), neighbors={'r_max': max_dist, 'r_min': 0.001})
-            keys = np.array(cl.cluster_keys, dtype=object)
-            patch_clusters.append(tuple(c for c in keys if len(c) == ref_cl_size))
-
-        set_a = set(map(tuple, patch_clusters[0]))
-        set_b = set(map(tuple, patch_clusters[1]))
-        for cluster in set_a | set_b:
-            key = tuple(sorted(cluster))
+        ref_shape = regular_ngon_reference(
+            ref_cl_size, R=1.0 / np.sin(np.pi / ref_cl_size),
+            opening_angle_rad=opening_angle,
+        )[0]
+        for key in freud_ngon_candidates([np.asarray(pA), np.asarray(pB)],
+                                         box_size, max_dist, ref_cl_size):
             if key in found:
                 continue
-            idx = np.array(key, dtype=int)
-            loss = shape_match_loss(centers[idx], ref_shape)
-            if np.isfinite(loss) and loss < cluster_check:
+            if shape_match_loss(centers[np.array(key)], ref_shape) < cluster_check:
                 counts[name] += 1
                 found.add(key)
 

@@ -35,7 +35,47 @@ __all__ = [
     "YieldDefaults", "run_sim", "my_sim", "v_run_my_sim",
     "random_IC", "v_random_IC", "run_many_particle_md",
     "save_sim_checkpoint", "load_sim_checkpoint", "md_relax_system",
+    "energy_fn_from_simple_params", "energy_fn_from_design_vector",
 ]
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# Shared energy-function construction
+# ══════════════════════════════════════════════════════════════════════════
+
+def energy_fn_from_simple_params(params, box_size):
+    """
+    ``(energy_fn, shift_fn, shape)`` for a :class:`base.params.SimpleParams`.
+
+    Opening angle from ``params.alpha``; Morse depths from
+    ``params.E_RR / E_RB / E_BB``; soft-sphere prefactor from ``params.rep_A``.
+    Morse decay/cutoff use the module ``ALPHA`` / ``R_CUTOFF`` (the yield-sweep
+    convention).
+    """
+    thetas = jnp.array([0.0, params.alpha])
+    eng_mat = energy_matrix(jnp.array([params.E_RR, params.E_RB, params.E_BB]))
+    energy_fn, shift = build_pair_energy_fn(
+        thetas, eng_mat, box_size, rep_A=params.rep_A,
+        alpha_morse=ALPHA, r_cutoff=R_CUTOFF, center_radius=CENTER_RADIUS,
+    )
+    return energy_fn, shift, thetas_to_shape(thetas, radius=CENTER_RADIUS)
+
+
+def energy_fn_from_design_vector(thetas_and_energy, box_size,
+                                center_radius=CENTER_RADIUS):
+    """
+    ``(energy_fn, shift_fn, shape, thetas)`` from the flat design vector
+    ``[theta_0, theta_1, E_01, E_00, E_11, ...]`` (entry 0 pinned to angle 0,
+    entries ``[:NUM_PATCHES]`` patch angles, rest the upper-triangular Morse
+    depths).  Soft-sphere prefactor fixed at 1e4.
+    """
+    tae = thetas_and_energy.at[0].set(0.0)
+    thetas = tae[:NUM_PATCHES]
+    eng_mat = energy_matrix(tae[NUM_PATCHES:])
+    energy_fn, shift = build_pair_energy_fn(
+        thetas, eng_mat, box_size, rep_A=10_000.0, center_radius=center_radius,
+    )
+    return energy_fn, shift, thetas_to_shape(thetas, radius=center_radius), thetas
 
 
 @dataclass(frozen=True)
@@ -67,18 +107,13 @@ def run_sim(thetas_and_energy, x0, num_steps, center_radius, box_size, key,
     (reference patch), entries ``[0:NUM_PATCHES]`` are patch angles, the rest are
     the upper-triangular Morse well depths.
     """
-    thetas_and_energy = thetas_and_energy.at[0].set(0.0)
-    thetas = thetas_and_energy[:NUM_PATCHES]
-    eng = thetas_and_energy[NUM_PATCHES:]
-    eng_mat = energy_matrix(eng)
-
-    energy_fn, shift = build_pair_energy_fn(
-        thetas, eng_mat, box_size, rep_A=10_000.0, center_radius=center_radius,
+    energy_fn, shift, shape, _ = energy_fn_from_design_vector(
+        thetas_and_energy, box_size, center_radius,
     )
 
     init_fn, step_fn = simulate.nvt_nose_hoover(energy_fn, shift, DT, kT)
     step_fn = jit(step_fn)
-    state = init_fn(key, x0, mass=thetas_to_shape(thetas, center_radius).mass())
+    state = init_fn(key, x0, mass=shape.mass())
     do_step = jit(lambda st, t: (step_fn(st), 0.0))
 
     inner_steps = jnp.arange(num_steps)
@@ -155,14 +190,7 @@ def run_many_particle_md(num_particles, box_size, params, num_steps, kT, key, dt
 
     Returns ``(final_state, pos_traj, ori_traj, e_traj)``.
     """
-    alpha = params.alpha
-    thetas = jnp.array([0.0, alpha])
-    eng_mat = energy_matrix(jnp.array([params.E_RR, params.E_RB, params.E_BB]))
-    energy_fn, shift = build_pair_energy_fn(
-        thetas, eng_mat, box_size, rep_A=params.rep_A,
-        alpha_morse=ALPHA, r_cutoff=R_CUTOFF, center_radius=CENTER_RADIUS,
-    )
-    shape = thetas_to_shape(thetas, radius=CENTER_RADIUS)
+    energy_fn, shift, shape = energy_fn_from_simple_params(params, box_size)
 
     init_fn, step_fn = simulate.nvt_nose_hoover(energy_fn, shift, dt, kT)
     energy_fn_jit = jit(energy_fn)
@@ -250,22 +278,14 @@ def md_relax_system(params, n_particles, num_steps, key, box_size,
     """
     Full-system NVT Nose-Hoover relaxation from a uniform random start.
 
-    ``params`` needs ``.alpha``, ``.E_RR``, ``.E_RB``, ``.E_BB`` and optionally
-    ``.rep_A``, ``.morse_a``, ``.morse_rcut``.
+    ``params`` needs ``.alpha``, ``.E_RR``, ``.E_RB``, ``.E_BB``, ``.rep_A``
+    (energy built via :func:`energy_fn_from_simple_params`).
 
     Returns ``(q_relaxed (3n,), final_state, positions_traj, orientations_traj,
     energy_traj)``.
     """
     dt = DT if dt is None else dt
-    thetas = jnp.array([0.0, params.alpha])
-    eng_mat = energy_matrix(jnp.array([params.E_RR, params.E_RB, params.E_BB]))
-    energy_fn, shift = build_pair_energy_fn(
-        thetas, eng_mat, box_size,
-        rep_A=getattr(params, 'rep_A', 100.0),
-        alpha_morse=getattr(params, 'morse_a', ALPHA),
-        r_cutoff=getattr(params, 'morse_rcut', R_CUTOFF),
-    )
-    shape = thetas_to_shape(thetas, radius=CENTER_RADIUS)
+    energy_fn, shift, shape = energy_fn_from_simple_params(params, box_size)
 
     k1, k2 = random.split(key)
     positions = random.uniform(k1, (n_particles, 2), minval=0.0, maxval=box_size)

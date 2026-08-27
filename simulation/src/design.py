@@ -23,10 +23,10 @@ from jax.example_libraries import optimizers
 from jax_md import space
 
 from base.config import CENTER_RADIUS, NUM_PATCHES, get_box_size
-from base.geometry import get_shape, body_to_plot
+from base.geometry import get_shape, body_to_plot, patch_separation
 from base.structure_detection import (
-    shape_match_loss, CLOSENESS_PENALTY, CLOSENESS_PENALTY_NEIGHBORS,
-    PATCH_ALLOWANCE,
+    shape_match_loss, freud_ngon_candidates,
+    CLOSENESS_PENALTY, CLOSENESS_PENALTY_NEIGHBORS, PATCH_ALLOWANCE,
 )
 from simulation.src.canonical_md import v_run_my_sim
 
@@ -212,36 +212,20 @@ def get_clusters(state, params, cl_type, box_size, allowance=PATCH_ALLOWANCE,
     Number of validated ``cl_type`` clusters in a single rigid-body ``state``,
     using freud on the patch point clouds + :func:`shape_match_loss` validation.
     """
-    import freud
-
-    n_patch = NUM_PATCHES
-    center_pos, patches_pos = body_to_plot(state, params[:n_patch])
-    center_pos = np.asarray(center_pos)
     ref_cl_size = {'square': 4, 'triangle': 3}.get(cl_type.lower())
     if ref_cl_size is None:
         return 0, set(), []
+
+    center_pos, patches_pos = body_to_plot(state, params[:NUM_PATCHES])
+    center_pos = np.asarray(center_pos)
     ref_shape = get_shape(cl_type, opening_angle_rad=float(params[1]))
+    max_dist = patch_separation(float(params[1])) + allowance
 
-    patch_dists = abs(2 * CENTER_RADIUS * np.sin(float(params[1]) / 2.0))
-    max_dist = patch_dists + allowance
-    box = freud.box.Box(box_size, box_size, is2D=True)
-
-    patch_clusters = []
-    for k in range(n_patch):
-        pts = np.hstack((np.asarray(patches_pos[k]),
-                         np.zeros((len(patches_pos[k]), 1))))
-        cl = freud.cluster.Cluster()
-        cl.compute((box, pts), neighbors={'r_max': max_dist, 'r_min': 0.001})
-        keys = np.array(cl.cluster_keys, dtype=object)
-        patch_clusters.append(tuple(c for c in keys if len(c) == ref_cl_size))
-
-    set_a = set(map(tuple, patch_clusters[0]))
-    set_b = set(map(tuple, patch_clusters[1]))
     final = set()
-    for cluster in set_a | set_b:
-        idx = np.array(cluster, dtype=int)
-        if shape_match_loss(center_pos[idx], ref_shape) < cluster_check:
-            final.add(tuple(sorted(cluster)))
+    for key in freud_ngon_candidates([np.asarray(p) for p in patches_pos],
+                                     box_size, max_dist, ref_cl_size):
+        if shape_match_loss(center_pos[np.array(key)], ref_shape) < cluster_check:
+            final.add(key)
     return len(final), final, [list(c) for c in final]
 
 

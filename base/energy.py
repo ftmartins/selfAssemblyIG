@@ -1,17 +1,22 @@
 """
 Energy functions for 2-patch patchy particles.
 
-Three flavours live here:
+Contents:
+
+0. Numpy/JAX-agnostic scalar-field primitives reused by every energy below:
+   :func:`minimum_image`, :func:`morse_well`, :func:`soft_sphere_repulsion`,
+   :func:`smooth_cutoff_weight`.
 
 1. :func:`total_energy` — a pure-JAX, **free-space** (no PBC) pairwise energy of
    ``n`` particles whose state is the flat vector ``q`` of shape ``(3n,)``.
    Differentiable in ``q``, ``E_AB`` and ``alpha_morse``.  Used by the ring
-   minimisation.
+   minimisation.  (Free-space uses a **hard** patch cutoff.)
 
 2. Periodic, ``params``-dict energies used by the hybrid GCMC engine:
-   :func:`minimum_image`, :func:`particle_energy` (O(N), numpy — for incremental
-   MC moves), :func:`total_energy_pbc` (O(N^2) diagnostic), and
-   :func:`total_energy_jax` (differentiable, for BAOAB forces).
+   :func:`particle_energy` (O(N), numpy — for incremental MC moves),
+   :func:`total_energy_pbc` (O(N^2) diagnostic), and :func:`total_energy_jax`
+   (differentiable, for BAOAB forces).  These share :func:`_patch_morse` and use
+   the **smooth** C1 patch cutoff.
 
 3. :func:`build_pair_energy_fn` — the single JAX-MD ``rigid_body.point_energy``
    builder (soft-sphere core repulsion + Morse patch attraction) shared by every
@@ -23,7 +28,42 @@ import jax.numpy as jnp
 from jax_md import space, energy as jmd_energy, rigid_body
 
 from base.config import PATCH_SIZE, ALPHA, R_CUTOFF, CENTER_RADIUS
-from base.geometry import thetas_to_shape
+from base.geometry import thetas_to_shape, patch_positions
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# 0. Shared scalar-field primitives  (numpy- or jax-array agnostic)
+# ══════════════════════════════════════════════════════════════════════════
+
+def _xp(a):
+    return jnp if isinstance(a, jnp.ndarray) else np
+
+
+def minimum_image(dr, L):
+    """Minimum-image displacement for any shape of ``dr`` (numpy or jax)."""
+    return dr - L * _xp(dr).round(dr / L)
+
+
+def morse_well(r, eps, alpha):
+    """Raw Morse potential ``eps * (1 - exp(-alpha r))**2 - eps``."""
+    return eps * (1.0 - _xp(r).exp(-alpha * r)) ** 2 - eps
+
+
+def soft_sphere_repulsion(r, sigma, prefactor):
+    """Truncated soft-sphere core repulsion ``prefactor * (1 - r/sigma)**2`` for
+    ``r < sigma`` (0 beyond)."""
+    return _xp(r).where(r < sigma, prefactor * (1.0 - r / sigma) ** 2, 0.0)
+
+
+def smooth_cutoff_weight(r, r_cut):
+    """C1 multiplicative window matching jax-md's
+    ``multiplicative_isotropic_cutoff`` with ``r_onset = 0``:
+    ``w(0)=1``, ``w(r_cut)=0``."""
+    rc2 = r_cut ** 2
+    r2 = r ** 2
+    return _xp(r).where(
+        r < r_cut, (rc2 - r2) ** 2 * (rc2 + 2.0 * r2) / rc2 ** 3, 0.0
+    )
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -53,24 +93,16 @@ def total_energy(
     centers = q_r[:, :2]
     thetas = q_r[:, 2]
 
-    pA = centers + r_patch * jnp.stack([jnp.cos(thetas), jnp.sin(thetas)], axis=-1)
-    pB = centers + r_patch * jnp.stack(
-        [jnp.cos(thetas + opening_angle), jnp.sin(thetas + opening_angle)], axis=-1
-    )
+    pA, pB = patch_positions(centers, thetas, opening_angle, r_patch)
 
     i_idx, j_idx = jnp.triu_indices(n, k=1)
 
-    sigma_cc = 2.0 * r_patch
-    dr_cc = centers[i_idx] - centers[j_idx]
-    r_cc = jnp.sqrt(jnp.sum(dr_cc ** 2, axis=-1))
-    v_rep = rep_A * (1.0 - r_cc / sigma_cc) ** 2
-    v_rep = jnp.where(r_cc < sigma_cc, v_rep, 0.0)
+    r_cc = jnp.sqrt(jnp.sum((centers[i_idx] - centers[j_idx]) ** 2, axis=-1))
+    v_rep = soft_sphere_repulsion(r_cc, 2.0 * r_patch, rep_A)
 
     def morse_pair(pos_i, pos_j, eps):
-        dr = pos_i - pos_j
-        r = jnp.sqrt(jnp.sum(dr ** 2, axis=-1))
-        v = eps * (1.0 - jnp.exp(-alpha_morse * r)) ** 2 - eps
-        return jnp.where(r < patch_sigma, v, 0.0)
+        r = jnp.sqrt(jnp.sum((pos_i - pos_j) ** 2, axis=-1))
+        return jnp.where(r < patch_sigma, morse_well(r, eps, alpha_morse), 0.0)
 
     v_AA = morse_pair(pA[i_idx], pA[j_idx], E_AA)
     v_BB = morse_pair(pB[i_idx], pB[j_idx], E_BB)
@@ -83,22 +115,11 @@ def total_energy(
 # 2. Periodic, params-dict energies  (q: (N, 3))
 # ══════════════════════════════════════════════════════════════════════════
 
-def minimum_image(dr, L):
-    """Minimum-image displacement for any shape of ``dr`` (numpy or jax)."""
-    xp = jnp if isinstance(dr, jnp.ndarray) else np
-    return dr - L * xp.round(dr / L)
-
-
-def _smooth_morse_weight(r, patch_sigma):
-    """C1 multiplicative cutoff window matching jax-md's
-    ``multiplicative_isotropic_cutoff`` with ``r_onset = 0``."""
-    rc2 = patch_sigma ** 2
-    r2 = r ** 2
-    return np.where(
-        r < patch_sigma,
-        (rc2 - r2) ** 2 * (rc2 + 2.0 * r2) / rc2 ** 3,
-        0.0,
-    )
+def _patch_morse(pi, pj, L, eps, alpha, patch_sigma):
+    """Smooth-cutoff Morse energy between two aligned sets of patch positions,
+    minimum-image applied."""
+    r = _xp(pi).sqrt(_xp(pi).sum(minimum_image(pi - pj, L) ** 2, axis=-1))
+    return smooth_cutoff_weight(r, patch_sigma) * morse_well(r, eps, alpha)
 
 
 def particle_energy(i, q, L, params):
@@ -110,39 +131,24 @@ def particle_energy(i, q, L, params):
     mask = np.ones(N, dtype=bool)
     mask[i] = False
     q_j = q[mask]
+    oa, rp = params['opening_angle'], params['r_patch']
 
-    ci = q[i, :2]
-    cj = q_j[:, :2]
-    dr_cc = minimum_image(ci[None, :] - cj, L)
-    r_cc = np.sqrt(np.sum(dr_cc ** 2, axis=-1))
-    sigma_cc = 2.0 * params['r_patch']
-    v_rep = np.where(
-        r_cc < sigma_cc,
-        params['rep_A'] * (1.0 - r_cc / sigma_cc) ** 2,
-        0.0,
-    )
+    r_cc = np.sqrt(np.sum(minimum_image(q[i, :2][None, :] - q_j[:, :2], L) ** 2, axis=-1))
+    v_rep = soft_sphere_repulsion(r_cc, 2.0 * rp, params['rep_A'])
 
-    thi = q[i, 2]
-    thj = q_j[:, 2]
-    oa = params['opening_angle']
-    rp = params['r_patch']
-    pAi = ci + rp * np.array([np.cos(thi), np.sin(thi)])
-    pBi = ci + rp * np.array([np.cos(thi + oa), np.sin(thi + oa)])
-    pAj = cj + rp * np.stack([np.cos(thj), np.sin(thj)], axis=-1)
-    pBj = cj + rp * np.stack([np.cos(thj + oa), np.sin(thj + oa)], axis=-1)
+    (pAi, pBi) = patch_positions(q[i:i + 1, :2], q[i:i + 1, 2], oa, rp)
+    pAj, pBj = patch_positions(q_j[:, :2], q_j[:, 2], oa, rp)
+    pAi, pBi = pAi[0], pBi[0]
 
-    def morse(pi, pj_arr, eps):
-        dr = minimum_image(pi[None, :] - pj_arr, L)
-        r = np.sqrt(np.sum(dr ** 2, axis=-1))
-        v = eps * (1.0 - np.exp(-params['alpha'] * r)) ** 2 - eps
-        return _smooth_morse_weight(r, params['patch_sigma']) * v
+    def m(pi, pj, eps):
+        return _patch_morse(pi, pj, L, eps, params['alpha'], params['patch_sigma'])
 
     return float(np.sum(
         v_rep
-        + morse(pAi, pAj, params['E_AA'])
-        + morse(pBi, pBj, params['E_BB'])
-        + morse(pAi, pBj, params['E_AB'])
-        + morse(pBi, pAj, params['E_AB'])
+        + m(pAi, pAj, params['E_AA'])
+        + m(pBi, pBj, params['E_BB'])
+        + m(pAi, pBj, params['E_AB'])
+        + m(pBi, pAj, params['E_AB'])
     ))
 
 
@@ -159,40 +165,16 @@ def total_energy_jax(q_flat, L, params):
     N = q_flat.shape[0] // 3
     q = q_flat.reshape(N, 3)
     c = q[:, :2]
-    th = q[:, 2]
-    oa = params['opening_angle']
-    rp = params['r_patch']
+    oa, rp = params['opening_angle'], params['r_patch']
 
-    pA = c + rp * jnp.stack([jnp.cos(th), jnp.sin(th)], axis=-1)
-    pB = c + rp * jnp.stack([jnp.cos(th + oa), jnp.sin(th + oa)], axis=-1)
-
+    pA, pB = patch_positions(c, q[:, 2], oa, rp)
     i_idx, j_idx = jnp.triu_indices(N, k=1)
 
-    def mi(dr):
-        return dr - L * jnp.round(dr / L)
-
-    def smooth_weight(r):
-        rc2 = params['patch_sigma'] ** 2
-        r2 = r ** 2
-        return jnp.where(
-            r < params['patch_sigma'],
-            (rc2 - r2) ** 2 * (rc2 + 2.0 * r2) / rc2 ** 3,
-            0.0,
-        )
-
     def morse(pi, pj, eps):
-        r = jnp.sqrt(jnp.sum(mi(pi - pj) ** 2, axis=-1))
-        v = eps * (1.0 - jnp.exp(-params['alpha'] * r)) ** 2 - eps
-        return smooth_weight(r) * v
+        return _patch_morse(pi, pj, L, eps, params['alpha'], params['patch_sigma'])
 
-    dr_cc = mi(c[i_idx] - c[j_idx])
-    r_cc = jnp.sqrt(jnp.sum(dr_cc ** 2, axis=-1))
-    sigma_cc = 2.0 * rp
-    v_rep = jnp.where(
-        r_cc < sigma_cc,
-        params['rep_A'] * (1.0 - r_cc / sigma_cc) ** 2,
-        0.0,
-    )
+    r_cc = jnp.sqrt(jnp.sum(minimum_image(c[i_idx] - c[j_idx], L) ** 2, axis=-1))
+    v_rep = soft_sphere_repulsion(r_cc, 2.0 * rp, params['rep_A'])
     return jnp.sum(
         v_rep
         + morse(pA[i_idx], pA[j_idx], params['E_AA'])

@@ -145,6 +145,11 @@ NGON_SIZES = {
 }
 
 
+def patch_separation(opening_angle, r=CENTER_RADIUS):
+    """Lab-frame distance between a particle's two patches: ``2 r |sin(alpha/2)|``."""
+    return 2.0 * r * abs(np.sin(opening_angle / 2.0))
+
+
 def get_shape(shape_id, opening_angle_rad=None):
     """
     Reference-shape vertex positions ``(n, 2)`` for ``shape_id`` (a polygon name

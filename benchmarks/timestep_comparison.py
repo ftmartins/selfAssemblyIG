@@ -19,10 +19,8 @@ from jax_md import simulate
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from base.jax_setup import configure_jax
-from base.config import DT, CENTER_RADIUS, DENSITY, kT, NUM_PATCHES, get_box_size
-from base.geometry import thetas_to_shape, energy_matrix
-from base.energy import build_pair_energy_fn
-from simulation.src.canonical_md import random_IC
+from base.config import DT, CENTER_RADIUS, DENSITY, kT, get_box_size
+from simulation.src.canonical_md import random_IC, energy_fn_from_design_vector
 from simulation.src.design import make_params
 
 
@@ -37,13 +35,11 @@ def parse_arguments():
 
 
 def run_sim_custom_dt(thetas_and_energy, x0, num_steps, box_size, key, dt, kT=kT):
-    thetas_and_energy = thetas_and_energy.at[0].set(0.0)
-    thetas = thetas_and_energy[:NUM_PATCHES]
-    eng_mat = energy_matrix(thetas_and_energy[NUM_PATCHES:])
-    energy_fn, shift = build_pair_energy_fn(thetas, eng_mat, box_size, rep_A=10_000.0)
+    """Flat-scan NVT run at a custom time step (no nested scan / remat)."""
+    energy_fn, shift, shape, _ = energy_fn_from_design_vector(thetas_and_energy, box_size)
     init_fn, step_fn = simulate.nvt_nose_hoover(energy_fn, shift, dt, kT)
     step_fn = jit(step_fn)
-    state = init_fn(key, x0, mass=thetas_to_shape(thetas, CENTER_RADIUS).mass())
+    state = init_fn(key, x0, mass=shape.mass())
     do_step = jit(lambda st, _: (step_fn(st), (st.position.center, st.position.orientation)))
     state, (pos, ori) = lax.scan(do_step, state, jnp.arange(num_steps))
     return state, pos, ori
