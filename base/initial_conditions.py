@@ -15,7 +15,10 @@ the GCMC engine adds Maxwell-Boltzmann velocities.
 import numpy as np
 
 from base.config import CENTER_RADIUS, PATCH_SIZE
-from base.energy import minimum_image
+
+
+def _minimum_image(dr, L):
+    return dr - L * np.round(dr / L)
 
 
 def default_min_distance() -> float:
@@ -71,7 +74,7 @@ def rsa_2d(
             cand = rng.uniform(lo, hi, size=2)
             if count == 0:
                 break
-            dr = minimum_image(cand[None, :] - pts[:count], box_size)
+            dr = _minimum_image(cand[None, :] - pts[:count], box_size)
             if np.all(np.sqrt(np.sum(dr ** 2, axis=-1)) >= min_distance):
                 break
         else:

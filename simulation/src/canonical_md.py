@@ -101,13 +101,6 @@ v_run_my_sim = jit(
 )
 
 
-@jit
-def run_sim_and_get_positions(param, state, box_size, key, sqrt_steps):
-    """vmapped ``run_sim`` returning ``(position, centers, orientations)``."""
-    xf, _, _ = v_run_my_sim(param, state, sqrt_steps, CENTER_RADIUS, box_size, key)
-    return xf.position, xf.position.center, xf.position.orientation
-
-
 # ── Uniform rigid-body initial condition ──────────────────────────────────
 
 def random_IC(thetas_and_energy, key, num_particles, box_size):
