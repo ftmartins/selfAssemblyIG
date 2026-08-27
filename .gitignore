@@ -1,0 +1,17 @@
+# Generated data and figures
+/data/
+/plots/
+/Logs/
+
+# Design/optimization run dirs (created next to CWD by optimize_design.py)
+*-Assembly_Optimization/
+/optimal_params/
+/yield_results/
+/yield_results_cluster/
+/initial_conditions/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.ipynb_checkpoints/
