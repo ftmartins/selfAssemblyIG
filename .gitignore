@@ -4,7 +4,7 @@
 /Logs/
 
 # Design/optimization run dirs (created next to CWD by optimize_design.py)
-*-Assembly_Optimization/
+*-Assembly_Optimization*/
 /optimal_params/
 /yield_results/
 /yield_results_cluster/
