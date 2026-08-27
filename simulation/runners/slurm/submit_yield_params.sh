@@ -21,7 +21,7 @@ conda activate /home1/felipetm/.conda/envs/selfAssemblyIG
 # You can now specify custom seeds for each simulation run
 
 # Square with seed 1273 (default)
-python run_yield_simulation.py  --params=optimal_params/square_params_20251208_101306.npz --seed=1273
+python simulation/runners/run_yield.py --params=data/design/square_params_20251208_101306.npz --seed=1273
 
 # Triangle with seed 1274
-python run_yield_simulation.py  --params=optimal_params/triangle_params_20260107_181733.npz --seed=1273
+python simulation/runners/run_yield.py --params=data/design/triangle_params_20260107_181733.npz --seed=1273

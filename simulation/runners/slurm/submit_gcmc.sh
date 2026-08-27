@@ -81,7 +81,7 @@ OPENING_ANGLE=$(python3 -c "import math; print(math.radians(${ANGLE_DEG}))")
 SEED=$(( ANGLE_IDX * 1000 + EAB_IDX * 10 + REAL_IDX ))
 
 # ── Output directory ──────────────────────────────────────────────────────────
-OUTPUT_DIR=$(python3 -c "from config_gcmc import GCMC_RUNS_DIR; print(GCMC_RUNS_DIR)")
+OUTPUT_DIR=$(python3 -c "from base.paths import GCMC_RUNS_DIR; print(GCMC_RUNS_DIR)")
 
 # ── Environment ───────────────────────────────────────────────────────────────
 cd $SLURM_SUBMIT_DIR
@@ -102,7 +102,7 @@ echo "Time:   $(date)"
 echo "=========================================="
 
 # Output file is auto-named from parameters when --output is not given
-python run_gcmc_hybrid.py \
+python simulation/runners/run_gcmc.py \
     --opening_angle    ${OPENING_ANGLE}    \
     --kT               ${KT}               \
     --E_AB             ${E_AB}             \

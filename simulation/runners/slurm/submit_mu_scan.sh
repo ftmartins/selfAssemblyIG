@@ -65,7 +65,7 @@ MU=${MU_VALUES[$MU_IDX]}
 E_AB=${EAB_VALUES[$EAB_IDX]}
 
 # ── Output directory ──────────────────────────────────────────────────────────
-OUTPUT_DIR=$(python3 -c "from config_gcmc import MU_SCAN_DIR; print(MU_SCAN_DIR)")
+OUTPUT_DIR=$(python3 -c "from base.paths import MU_SCAN_DIR; print(MU_SCAN_DIR)")
 
 # ── Environment ───────────────────────────────────────────────────────────────
 cd $SLURM_SUBMIT_DIR
@@ -84,7 +84,7 @@ echo "Host:   $(hostname)"
 echo "Time:   $(date)"
 echo "=========================================="
 
-python mu_scan_gcmc.py \
+python simulation/runners/scan_mu.py \
     --mu            ${MU}            \
     --box_area      ${BOX_AREA}      \
     --opening_angle ${OPENING_ANGLE} \

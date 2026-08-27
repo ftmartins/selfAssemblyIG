@@ -18,7 +18,7 @@ conda activate /home1/felipetm/.conda/envs/selfAssemblyIG
 
 # Preview grid (only from first task, for the log)
 if [ "$SLURM_ARRAY_TASK_ID" -eq 0 ]; then
-    python generate_simulation_tasks.py
+    python simulation/runners/preview_grid.py
 fi
 
-python run_yield_simulation_cluster.py $SLURM_ARRAY_TASK_ID
+python simulation/runners/run_yield_cluster.py $SLURM_ARRAY_TASK_ID
