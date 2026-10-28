@@ -9,7 +9,7 @@ Parameter containers shared by the simulation engines.
   the MD-runner LRU cache).
 """
 
-from base.config import ALPHA, PATCH_SIZE
+from base.config import ALPHA, MORSE_R_ONSET, MORSE_R_CUTOFF
 
 
 class SimpleParams:
@@ -87,5 +87,6 @@ def make_gcmc_params(
         E_AB=float(E_AB),
         rep_A=float(rep_A),
         alpha=float(ALPHA),
-        patch_sigma=float(PATCH_SIZE),
+        r_onset=float(MORSE_R_ONSET),
+        r_cutoff=float(MORSE_R_CUTOFF),
     )

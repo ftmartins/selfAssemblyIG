@@ -10,7 +10,7 @@ Three code layers (see `docs/repository_organization.md` for the model and
 
 ```
 base/                    shared primitives — importable with zero side effects
-  config.py              physical constants (ALPHA, PATCH_SIZE, CENTER_RADIUS, kT, …)
+  config.py              physical constants (ALPHA, PATCH_RADIUS, MORSE_R_ONSET, MORSE_R_CUTOFF, CENTER_RADIUS, kT, …)
   jax_setup.py           configure_jax(x64=True, debug_nans=False)  — call explicitly
   geometry.py            thetas_to_shape, energy_matrix, patch_positions,
                          regular_ngon_reference, get_shape
@@ -108,3 +108,12 @@ set to that folder — the first cell adds the repo root to `sys.path`).
 - No global mutable state: particle count / box size are explicit arguments
   everywhere.  See `docs/migration_notes.md` for the full list of behavioural
   changes.
+
+## Tests
+
+```
+python -m pytest            # whole suite
+python -m pytest -m fast    # fast unit tests only
+```
+
+Requires `pytest` and `h5py` (listed in `environment.yml` / `requirements.txt`).

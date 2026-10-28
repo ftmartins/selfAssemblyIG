@@ -10,13 +10,13 @@ Contents:
 1. :func:`total_energy` — a pure-JAX, **free-space** (no PBC) pairwise energy of
    ``n`` particles whose state is the flat vector ``q`` of shape ``(3n,)``.
    Differentiable in ``q``, ``E_AB`` and ``alpha_morse``.  Used by the ring
-   minimisation.  (Free-space uses a **hard** patch cutoff.)
+   minimisation.  (Same smooth Morse window as every other energy.)
 
 2. Periodic, ``params``-dict energies used by the hybrid GCMC engine:
    :func:`particle_energy` (O(N), numpy — for incremental MC moves),
    :func:`total_energy_pbc` (O(N^2) diagnostic), and :func:`total_energy_jax`
    (differentiable, for BAOAB forces).  These share :func:`_patch_morse` and use
-   the **smooth** C1 patch cutoff.
+   the smooth C1 Morse window (``r_onset`` .. ``r_cutoff``).
 
 3. :func:`build_pair_energy_fn` — the single JAX-MD ``rigid_body.point_energy``
    builder (soft-sphere core repulsion + Morse patch attraction) shared by every
@@ -27,7 +27,7 @@ import numpy as np
 import jax.numpy as jnp
 from jax_md import space, energy as jmd_energy, rigid_body
 
-from base.config import PATCH_SIZE, ALPHA, R_CUTOFF, CENTER_RADIUS
+from base.config import ALPHA, MORSE_R_ONSET, MORSE_R_CUTOFF, CENTER_RADIUS
 from base.geometry import thetas_to_shape, patch_positions
 
 
@@ -55,15 +55,16 @@ def soft_sphere_repulsion(r, sigma, prefactor):
     return _xp(r).where(r < sigma, prefactor * (1.0 - r / sigma) ** 2, 0.0)
 
 
-def smooth_cutoff_weight(r, r_cut):
-    """C1 multiplicative window matching jax-md's
-    ``multiplicative_isotropic_cutoff`` with ``r_onset = 0``:
-    ``w(0)=1``, ``w(r_cut)=0``."""
-    rc2 = r_cut ** 2
-    r2 = r ** 2
-    return _xp(r).where(
-        r < r_cut, (rc2 - r2) ** 2 * (rc2 + 2.0 * r2) / rc2 ** 3, 0.0
+def smooth_cutoff_weight(r, r_onset, r_cutoff):
+    """C1 multiplicative window identical to jax-md's
+    ``multiplicative_isotropic_cutoff``: 1 below ``r_onset``, 0 from
+    ``r_cutoff`` on, smooth in between (ADR-0001)."""
+    xp = _xp(r)
+    r2, c2, o2 = r ** 2, r_cutoff ** 2, r_onset ** 2
+    inner = xp.where(
+        r < r_cutoff, (c2 - r2) ** 2 * (c2 + 2.0 * r2 - 3.0 * o2) / (c2 - o2) ** 3, 0.0
     )
+    return xp.where(r < r_onset, 1.0, inner)
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -79,15 +80,13 @@ def total_energy(
     E_BB=1.0,
     r_patch=1.0,
     rep_A=10.0,
-    patch_sigma=None,
+    r_onset=MORSE_R_ONSET,
+    r_cutoff=MORSE_R_CUTOFF,
 ):
     """
     Total pairwise interaction energy of ``n`` 2-patch patchy particles in free
     space.  ``q`` is ``[x1, y1, theta1, x2, y2, theta2, ...]``.
     """
-    if patch_sigma is None:
-        patch_sigma = PATCH_SIZE
-
     n = q.shape[0] // 3
     q_r = q.reshape(n, 3)
     centers = q_r[:, :2]
@@ -102,7 +101,7 @@ def total_energy(
 
     def morse_pair(pos_i, pos_j, eps):
         r = jnp.sqrt(jnp.sum((pos_i - pos_j) ** 2, axis=-1))
-        return jnp.where(r < patch_sigma, morse_well(r, eps, alpha_morse), 0.0)
+        return smooth_cutoff_weight(r, r_onset, r_cutoff) * morse_well(r, eps, alpha_morse)
 
     v_AA = morse_pair(pA[i_idx], pA[j_idx], E_AA)
     v_BB = morse_pair(pB[i_idx], pB[j_idx], E_BB)
@@ -115,11 +114,11 @@ def total_energy(
 # 2. Periodic, params-dict energies  (q: (N, 3))
 # ══════════════════════════════════════════════════════════════════════════
 
-def _patch_morse(pi, pj, L, eps, alpha, patch_sigma):
+def _patch_morse(pi, pj, L, eps, alpha, r_onset, r_cutoff):
     """Smooth-cutoff Morse energy between two aligned sets of patch positions,
     minimum-image applied."""
     r = _xp(pi).sqrt(_xp(pi).sum(minimum_image(pi - pj, L) ** 2, axis=-1))
-    return smooth_cutoff_weight(r, patch_sigma) * morse_well(r, eps, alpha)
+    return smooth_cutoff_weight(r, r_onset, r_cutoff) * morse_well(r, eps, alpha)
 
 
 def particle_energy(i, q, L, params):
@@ -141,7 +140,8 @@ def particle_energy(i, q, L, params):
     pAi, pBi = pAi[0], pBi[0]
 
     def m(pi, pj, eps):
-        return _patch_morse(pi, pj, L, eps, params['alpha'], params['patch_sigma'])
+        return _patch_morse(pi, pj, L, eps, params['alpha'],
+                            params['r_onset'], params['r_cutoff'])
 
     return float(np.sum(
         v_rep
@@ -171,7 +171,8 @@ def total_energy_jax(q_flat, L, params):
     i_idx, j_idx = jnp.triu_indices(N, k=1)
 
     def morse(pi, pj, eps):
-        return _patch_morse(pi, pj, L, eps, params['alpha'], params['patch_sigma'])
+        return _patch_morse(pi, pj, L, eps, params['alpha'],
+                            params['r_onset'], params['r_cutoff'])
 
     r_cc = jnp.sqrt(jnp.sum(minimum_image(c[i_idx] - c[j_idx], L) ** 2, axis=-1))
     v_rep = soft_sphere_repulsion(r_cc, 2.0 * rp, params['rep_A'])
@@ -195,7 +196,8 @@ def build_pair_energy_fn(
     *,
     rep_A,
     alpha_morse=ALPHA,
-    r_cutoff=R_CUTOFF,
+    r_onset=MORSE_R_ONSET,
+    r_cutoff=MORSE_R_CUTOFF,
     center_radius=CENTER_RADIUS,
 ):
     """
@@ -209,7 +211,7 @@ def build_pair_energy_fn(
     eng_mat : (n_patch, n_patch) array — symmetric Morse well-depth matrix
     box_size : float — periodic box side length
     rep_A : float — soft-sphere repulsion prefactor
-    alpha_morse, r_cutoff, center_radius : Morse / geometry parameters
+    alpha_morse, r_onset, r_cutoff, center_radius : Morse / geometry parameters
 
     Returns
     -------
@@ -229,7 +231,7 @@ def build_pair_energy_fn(
     )
     pair_morse = jmd_energy.morse_pair(
         displacement, species=n_species,
-        sigma=0.0, epsilon=morse_eps, alpha=alpha_morse, r_cutoff=r_cutoff,
+        sigma=0.0, epsilon=morse_eps, alpha=alpha_morse, r_onset=r_onset, r_cutoff=r_cutoff,
     )
     pair_fn = lambda R, **kw: pair_soft(R, **kw) + pair_morse(R, **kw)
 

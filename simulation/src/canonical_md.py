@@ -26,7 +26,7 @@ from jax import jit, random, lax, vmap, remat
 from jax_md import simulate, rigid_body
 
 from base.config import (
-    DT, CENTER_RADIUS, ALPHA, R_CUTOFF, NUM_PATCHES, kT as KT_DEFAULT,
+    DT, CENTER_RADIUS, ALPHA, NUM_PATCHES, kT as KT_DEFAULT,
 )
 from base.geometry import thetas_to_shape, energy_matrix
 from base.energy import build_pair_energy_fn
@@ -49,14 +49,14 @@ def energy_fn_from_simple_params(params, box_size):
 
     Opening angle from ``params.alpha``; Morse depths from
     ``params.E_RR / E_RB / E_BB``; soft-sphere prefactor from ``params.rep_A``.
-    Morse decay/cutoff use the module ``ALPHA`` / ``R_CUTOFF`` (the yield-sweep
+    Morse decay/cutoff use the module ``ALPHA`` / ``MORSE_R_ONSET`` / ``MORSE_R_CUTOFF`` (the yield-sweep
     convention).
     """
     thetas = jnp.array([0.0, params.alpha])
     eng_mat = energy_matrix(jnp.array([params.E_RR, params.E_RB, params.E_BB]))
     energy_fn, shift = build_pair_energy_fn(
         thetas, eng_mat, box_size, rep_A=params.rep_A,
-        alpha_morse=ALPHA, r_cutoff=R_CUTOFF, center_radius=CENTER_RADIUS,
+        alpha_morse=ALPHA, center_radius=CENTER_RADIUS,
     )
     return energy_fn, shift, thetas_to_shape(thetas, radius=CENTER_RADIUS)
 
