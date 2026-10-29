@@ -20,7 +20,7 @@ base/                    shared primitives — importable with zero side effects
   grids.py               YIELD_* / MU_SCAN_* grids + job_id ↔ params mappings
   paths.py               repo-root-relative data/plot dirs, make_gcmc_run_dir
   initial_conditions.py  rsa_2d (one RSA), random_uniform_ic
-  structure_detection.py bond-graph clustering + freud count_polygons
+  structure_detection.py snapshot-yield detectors (shape-filtered) + freud count_polygons
   io.py                  pickle-npy + rename_with_backup
   trajectory.py          HDF5 trajectory store (writer/reader) + legacy loader
 
@@ -37,6 +37,8 @@ simulation/
     slurm/              SLURM array wrappers
 
 analysis/
+  bond_graph.py          ADR-0002 bond-graph clusters, particle/cluster yields with
+                         block errors, seed combination (API in module docstring)
   mu_scan.py             equilibration test, per-mu aggregation, mu* finder
   yields.py              (opening angle, selectivity) yield-grid assembly
   gcmc_runs.py           discover / parse / load run.npz directories

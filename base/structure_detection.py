@@ -1,4 +1,7 @@
 """
+SNAPSHOT-YIELD detectors (shape-filtered, finite-time; validation and literature
+comparison only).  Equilibrium yields use ``analysis.bond_graph`` (ADR-0002).
+
 Cluster / polygon detection on a produced particle configuration.
 
 Two independent detectors:
