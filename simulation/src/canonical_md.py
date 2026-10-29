@@ -18,6 +18,7 @@ The shared JAX-MD energy-function construction lives in
 """
 
 from dataclasses import dataclass
+from functools import partial
 
 import numpy as np
 import jax
@@ -30,11 +31,12 @@ from base.config import (
 )
 from base.geometry import thetas_to_shape, energy_matrix
 from base.energy import build_pair_energy_fn
+from base.trajectory import TrajectoryWriter
 
 __all__ = [
     "YieldDefaults", "run_sim", "my_sim", "v_run_my_sim",
     "random_IC", "v_random_IC", "run_many_particle_md",
-    "save_sim_checkpoint", "load_sim_checkpoint", "md_relax_system",
+    "md_relax_system",
     "energy_fn_from_simple_params", "energy_fn_from_design_vector",
 ]
 
@@ -154,119 +156,128 @@ v_random_IC = vmap(random_IC, in_axes=(None, 0, None, None))
 # Many-particle chunked + checkpointed driver (SLURM array yield runner)
 # ══════════════════════════════════════════════════════════════════════════
 
-def save_sim_checkpoint(ckpt_path, state, phase, phase_step, **extra):
-    np.savez(ckpt_path, full_md_state=state, phase=phase, phase_step=phase_step, **extra)
-    print(f"    Checkpoint saved: {ckpt_path.name} (phase={phase}, step={phase_step:,})",
-          flush=True)
-
-
-def load_sim_checkpoint(ckpt_path):
-    if not ckpt_path.exists():
-        return None
-    data = np.load(ckpt_path, allow_pickle=True)
-    result = {
-        'state': data['full_md_state'].item(),
-        'phase': str(data['phase']),
-        'phase_step': int(data['phase_step']),
-    }
-    for key in ['pos_traj', 'ori_traj', 'e_traj', 'sample_idx']:
-        if key in data:
-            result[key] = data[key] if key != 'sample_idx' else int(data[key])
-    return result
+def _model_attrs(params, num_particles, box_size, num_steps, equilibration_steps,
+                 kT, dt, sample_interval, equilibration_sample_interval, seed):
+    E_AA, E_BB, E_AB = float(params.E_RR), float(params.E_BB), float(params.E_RB)
+    return dict(
+        ensemble='canonical', engine='nvt_nose_hoover', thermostat='nose_hoover_chain',
+        seed=-1 if seed is None else int(seed), N=int(num_particles),
+        box_size=float(box_size), kT=float(kT), dt=float(dt),
+        opening_angle=float(params.alpha), E_AA=E_AA, E_BB=E_BB, E_AB=E_AB,
+        bond_specificity=E_AB / (E_AA + E_BB), rep_A=float(params.rep_A),
+        num_equilibration_steps=int(equilibration_steps),
+        num_production_steps=int(num_steps),
+        sample_interval=int(sample_interval),
+        equilibration_sample_interval=int(equilibration_sample_interval),
+    )
 
 
 def run_many_particle_md(num_particles, box_size, params, num_steps, kT, key, dt,
                          initial_positions, initial_orientations,
                          sample_interval=100, equilibration_steps=0,
-                         checkpoint_dir=None, checkpoint_prefix='ckpt',
-                         checkpoint_interval=200_000):
+                         equilibration_sample_interval=0,
+                         trajectory_path=None, resume=False, precision='float64',
+                         checkpoint_interval=200_000, seed=None):
     """
-    Many-particle NVT MD with chunked equilibration + production, disk
-    checkpointing and trajectory recording.
+    Many-particle NVT MD, chunked, streaming every sampled frame to the HDF5
+    trajectory store (:mod:`base.trajectory`) at ``trajectory_path``.
 
     ``params`` is a :class:`base.params.SimpleParams`.  The caller supplies the
     initial ``(positions, orientations)`` (e.g. from
-    :func:`base.initial_conditions.rsa_2d`).
+    :func:`base.initial_conditions.rsa_2d`).  Production frames are written
+    every ``sample_interval`` steps (including step 0); equilibration frames
+    every ``equilibration_sample_interval`` steps (0 = none).  After each
+    ``checkpoint_interval`` steps the MD state is written to the file's restart
+    group; with ``resume=True`` an existing file is continued from its last
+    restart, frames written after it are dropped and recomputed, so no frame is
+    duplicated.  When the run completes the restart group holds the final state
+    (phase ``'done'``).
 
-    Returns ``(final_state, pos_traj, ori_traj, e_traj)``.
+    Returns the final MD state.
     """
+    if trajectory_path is None:
+        raise ValueError('trajectory_path is required')
     energy_fn, shift, shape = energy_fn_from_simple_params(params, box_size)
-
     init_fn, step_fn = simulate.nvt_nose_hoover(energy_fn, shift, dt, kT)
-    energy_fn_jit = jit(energy_fn)
+    x0 = rigid_body.RigidBody(jnp.asarray(initial_positions),
+                              jnp.asarray(initial_orientations))
+    state = init_fn(key, x0, mass=shape.mass())
+    treedef = jax.tree_util.tree_structure(state)
 
-    def _eq_step(carry, _):
-        return step_fn(carry), None
+    def observe(st):
+        return (st.position.center, st.position.orientation,
+                energy_fn(st.position),
+                rigid_body.kinetic_energy(st.position, st.momentum, st.mass))
 
-    ckpt_path = (checkpoint_dir / f'{checkpoint_prefix}.npz') if checkpoint_dir else None
-    ckpt = load_sim_checkpoint(ckpt_path) if ckpt_path else None
+    observe = jit(observe)
 
-    if ckpt is not None:
-        state = ckpt['state']
-        phase = ckpt['phase']
-        phase_step = ckpt['phase_step']
-        print(f"  Resumed from checkpoint: phase={phase}, step={phase_step:,}", flush=True)
-    else:
-        x0 = rigid_body.RigidBody(jnp.asarray(initial_positions),
-                                  jnp.asarray(initial_orientations))
-        state = init_fn(key, x0, mass=shape.mass())
-        phase = 'equilibration' if equilibration_steps > 0 else 'production'
-        phase_step = 0
+    @partial(jit, static_argnums=(1,))
+    def advance(st, n):
+        return lax.scan(lambda c, _: (step_fn(c), None), st, None, length=n)[0]
 
-    if phase == 'equilibration':
-        eq_done = phase_step
-        print(f"  Equilibration ({equilibration_steps:,} steps, from {eq_done:,})...", flush=True)
-        while eq_done < equilibration_steps:
-            chunk = min(checkpoint_interval, equilibration_steps - eq_done)
-            state, _ = lax.scan(_eq_step, state, jnp.arange(chunk))
-            eq_done += chunk
-            print(f"  Equilibration: {eq_done:,}/{equilibration_steps:,}", flush=True)
-            if ckpt_path:
-                save_sim_checkpoint(ckpt_path, state, 'equilibration', eq_done)
-        phase, phase_step = 'production', 0
+    @partial(jit, static_argnums=(1, 2))
+    def advance_sampled(st, n_samples, interval):
+        def body(c, _):
+            c = advance(c, interval)
+            return c, observe(c)
+        return lax.scan(body, st, None, length=n_samples)
 
-    max_samples = num_steps // sample_interval + 2
+    attrs = _model_attrs(params, num_particles, box_size, num_steps, equilibration_steps,
+                         kT, dt, sample_interval, equilibration_sample_interval, seed)
+    writer = TrajectoryWriter(trajectory_path, attrs, resume=resume, precision=precision)
 
-    if phase == 'production' and phase_step > 0 and ckpt is not None:
-        positions_traj = jnp.array(ckpt['pos_traj'])
-        orientations_traj = jnp.array(ckpt['ori_traj'])
-        energy_traj = jnp.array(ckpt['e_traj'])
-        sample_idx = jnp.array(ckpt['sample_idx'])
-    else:
-        positions_traj = jnp.zeros((max_samples, num_particles, 2))
-        orientations_traj = jnp.zeros((max_samples, num_particles))
-        energy_traj = jnp.zeros(max_samples)
-        positions_traj = positions_traj.at[0].set(state.position.center)
-        orientations_traj = orientations_traj.at[0].set(state.position.orientation)
-        energy_traj = energy_traj.at[0].set(energy_fn_jit(state.position))
-        sample_idx = jnp.array(0)
+    def record(st, phase, step):
+        pos, ori, pe, ke = observe(st)
+        writer.append_frame(np.asarray(pos), np.asarray(ori), float(pe), step,
+                            phase=phase, kinetic_energy=float(ke))
 
-    def step_func(carry, step_idx):
-        cur, s_idx, pos_t, ori_t, e_t = carry
-        new = step_fn(cur)
-        should = (step_idx + 1) % sample_interval == 0
-        nxt = jnp.where(should & (s_idx < max_samples - 1), s_idx + 1, s_idx)
-        pos_t = jnp.where(should, pos_t.at[nxt].set(new.position.center), pos_t)
-        ori_t = jnp.where(should, ori_t.at[nxt].set(new.position.orientation), ori_t)
-        e_t = jnp.where(should, e_t.at[nxt].set(energy_fn_jit(new.position)), e_t)
-        return (new, nxt, pos_t, ori_t, e_t), None
+    def checkpoint(st, phase, step):
+        writer.write_restart(phase, step, [np.asarray(l) for l in
+                                           jax.tree_util.tree_leaves(st)])
 
-    prod_done = phase_step
-    carry = (state, sample_idx, positions_traj, orientations_traj, energy_traj)
-    print(f"  Production ({num_steps:,} steps, from {prod_done:,})...", flush=True)
-    while prod_done < num_steps:
-        chunk = min(checkpoint_interval, num_steps - prod_done)
-        carry, _ = lax.scan(step_func, carry, jnp.arange(prod_done, prod_done + chunk))
-        prod_done += chunk
-        print(f"  Production: {prod_done:,}/{num_steps:,}", flush=True)
-        if ckpt_path:
-            s_now, sidx, pt, ot, et = carry
-            save_sim_checkpoint(ckpt_path, s_now, 'production', prod_done,
-                                pos_traj=np.array(pt), ori_traj=np.array(ot),
-                                e_traj=np.array(et), sample_idx=int(sidx))
+    first = 'equilibration' if equilibration_steps > 0 else 'production'
+    phase, done = first, 0
+    if writer.restart is not None:
+        phase, done, leaves, _ = writer.restart[:4]
+        state = jax.tree_util.tree_unflatten(treedef, [jnp.asarray(l) for l in leaves])
+        print(f"  Resumed from checkpoint: phase={phase}, step={done:,}", flush=True)
 
-    final_state, _, pos_traj, ori_traj, e_traj = carry
-    return final_state, pos_traj, ori_traj, e_traj
+    try:
+        for name, total, interval in [('equilibration', equilibration_steps,
+                                       equilibration_sample_interval),
+                                      ('production', num_steps, sample_interval)]:
+            if phase == 'done' or (phase == 'production' and name == 'equilibration'):
+                continue
+            if phase == 'equilibration' and name == 'production':
+                phase, done = 'production', 0
+            start = done if phase == name else 0
+            if interval > 0 and start == 0 and writer.n_frames(name) == 0:
+                record(state, name, 0)
+            chunk = checkpoint_interval
+            if interval > 0:
+                chunk = max(interval, chunk // interval * interval)
+            while start < total:
+                c = min(chunk, total - start)
+                n_s = c // interval if interval > 0 else 0
+                if n_s:
+                    state, (pos, ori, pe, ke) = advance_sampled(state, n_s, interval)
+                    pos, ori, pe, ke = map(np.asarray, (pos, ori, pe, ke))
+                    for k in range(n_s):
+                        writer.append_frame(pos[k], ori[k], pe[k],
+                                            start + interval * (k + 1), phase=name,
+                                            kinetic_energy=ke[k])
+                if c - n_s * interval:
+                    state = advance(state, c - n_s * interval)
+                start += c
+                print(f"  {name.capitalize()}: {start:,}/{total:,}", flush=True)
+                checkpoint(state, name, start)
+            phase, done = name, total
+            if total == 0:
+                checkpoint(state, name, 0)
+        checkpoint(state, 'done', num_steps)
+    finally:
+        writer.close()
+    return state
 
 
 # ══════════════════════════════════════════════════════════════════════════
