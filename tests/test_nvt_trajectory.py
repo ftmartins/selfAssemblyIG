@@ -114,3 +114,41 @@ def test_resume_of_finished_run_adds_nothing(tmp_path):
     run(p, resume=True)
     r = open_trajectory(p)
     assert r.n_frames('production') == PROD // SI + 1
+
+
+# ── the canonical runners ────────────────────────────────────────────────
+
+def test_cluster_runner_writes_one_file_per_realization_and_resumes(tmp_path, monkeypatch):
+    import sys
+    from simulation.runners import run_yield_cluster as ryc
+    argv = ['run_yield_cluster', '0', '--output-dir', str(tmp_path), '--num-particles', '4',
+            '--equilibration-steps', '20', '--num-steps', '40', '--sample-interval', '10',
+            '--equilibration-sample-interval', '10', '--checkpoint-interval', '20',
+            '--realizations', '2']
+    monkeypatch.setattr(sys, 'argv', argv)
+    ryc.main()
+    files = sorted(tmp_path.glob('*_r*.h5'))
+    assert len(files) == 2 and not list(tmp_path.glob('*_trajectory.npz'))
+    assert not list((tmp_path).glob('checkpoints'))
+    with open_trajectory(files[0]) as r:
+        assert r.attrs['ensemble'] == 'canonical' and r.attrs['precision'] == 'float32'
+        assert r.n_frames('production') == 5 and r.n_frames('equilibration') == 3
+    ryc.main()                      # rerun: finished files untouched, no duplicates
+    assert open_trajectory(files[0]).n_frames('production') == 5
+
+
+def test_design_runner_streams_frames_and_resumes(tmp_path):
+    import jax
+    from simulation.runners.run_yield import run_nvt
+    from simulation.src.canonical_md import random_IC
+    v = jax.numpy.array([0.0, 1.5, 3.0, 1.0, 1.0])     # ref angle, theta, E_AA, E_AB, E_BB
+    body = random_IC(v, jax.random.PRNGKey(0), 4, BOX)
+    kw = dict(chunk_size=3, frame_stride=1, equilibration_frame_stride=0)
+    p, q = tmp_path / 'a.h5', tmp_path / 'b.h5'
+    run_nvt(v, body, BOX, 3, 6, 5, p, **kw)
+    with open_trajectory(p) as r:
+        assert r.n_frames('equilibration') == 0 and r.n_frames('production') == 1 + 6
+        assert r.attrs['E_AB'] == 1.0 and r.attrs['opening_angle'] == 1.5
+    # resuming a finished file adds nothing
+    run_nvt(v, body, BOX, 3, 6, 5, p, resume=True, **kw)
+    assert open_trajectory(p).n_frames('production') == 7

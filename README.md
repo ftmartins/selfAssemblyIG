@@ -22,6 +22,7 @@ base/                    shared primitives — importable with zero side effects
   initial_conditions.py  rsa_2d (one RSA), random_uniform_ic
   structure_detection.py bond-graph clustering + freud count_polygons
   io.py                  pickle-npy + rename_with_backup
+  trajectory.py          HDF5 trajectory store (writer/reader) + legacy loader
 
 simulation/
   src/
@@ -87,6 +88,20 @@ MU=-4.0 sbatch simulation/runners/slurm/submit_gcmc.sh
 python simulation/runners/preview_grid.py            # job_id ↔ (alpha, zeta)
 sbatch simulation/runners/slurm/submit_yield.sh      # SLURM array
 ```
+
+### Trajectory file (HDF5)
+
+Canonical runs write one `.h5` file per run (`base/trajectory.py`; the schema is
+in its module docstring). Root attributes hold model constants, design
+parameters, ensemble, seed, step counts, `dt`, thermostat, software version and
+`precision` (dtype of coordinates; energies are always float64). Groups
+`equilibration` and `production` hold per-frame `step`, `N`, `offset`,
+`potential_energy`, `kinetic_energy` and flat `positions` (sum N, 2) /
+`orientations` (sum N); frame i is rows `offset[i]:offset[i]+N[i]` (no padding,
+so variable-N frames work). Group `restart` holds the MD state and, when
+finished, phase `done`. Read with `open_trajectory(path).frames(phase, start,
+stop, step)`; legacy `.npz` / pickled `.npy` files open through the same call.
+Rerunning a canonical job resumes from the file without duplicating frames.
 
 ### Patch-parameter design
 

@@ -32,6 +32,7 @@ from base.params import generate_parameter_grid
 from base.initial_conditions import rsa_2d
 from base.structure_detection import STRUCTURES, BOND_THRESHOLD, compute_yields_from_frame
 from base.paths import YIELD_DIR
+from base.trajectory import open_trajectory
 from simulation.src.canonical_md import DEFAULTS as YD, run_many_particle_md
 
 # Box is sized for YD.num_particles (3000) regardless of the actual particle
@@ -49,18 +50,21 @@ def parse_args():
     p.add_argument('--num-steps', type=int, default=YD.num_steps)
     p.add_argument('--sample-interval', type=int, default=YD.sample_interval)
     p.add_argument('--checkpoint-interval', type=int, default=YD.checkpoint_interval)
+    p.add_argument('--equilibration-sample-interval', type=int, default=YD.equilibration_sample_interval,
+                   help='0 = store no equilibration frames')
+    p.add_argument('--precision', choices=['float32', 'float64'], default='float32')
     p.add_argument('--realizations', type=int, default=NUM_REALIZATIONS)
     return p.parse_args()
 
 
-def compute_realization_yields(pos_traj, ori_traj, params):
-    valid = np.any(pos_traj != 0, axis=(1, 2))
-    n_valid = int(np.sum(valid))
-    start = max(1, n_valid // 2)
+def compute_realization_yields(reader, params):
+    """Average snapshot yields over the second half of the production frames."""
+    n_frames = reader.n_frames('production')
+    frames = reader.frames('production', max(1, n_frames // 2), None)
     frame_yields, frame_counts = [], []
-    for f in range(start, n_valid):
+    for f in frames:
         y, c, _, _ = compute_yields_from_frame(
-            pos_traj[f], ori_traj[f], params.r_patch, params.alpha, BOND_THRESHOLD
+            f.positions, f.orientations, params.r_patch, params.alpha, BOND_THRESHOLD
         )
         frame_yields.append(y)
         frame_counts.append(c)
@@ -94,63 +98,40 @@ def main():
 
     out_dir = Path(args.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    ckpt_base = out_dir / 'checkpoints' / f'N{args.num_particles}_alpha{alpha_deg:.1f}_zeta{zeta:.3f}'
-
-    all_pos, all_ori, all_e = [], [], []
     all_yields, all_counts, all_nframes = [], [], []
     t_start = datetime.now()
+    stem = f'job_{job_id:04d}_alpha{alpha_deg:.0f}_zeta{zeta:.2f}'
 
     for r in range(args.realizations):
         print(f"\n--- Realization {r + 1}/{args.realizations} ---")
-        ckpt_dir = ckpt_base / f'r{r}'
-        ckpt_dir.mkdir(parents=True, exist_ok=True)
-
         import jax
         key = jax.random.PRNGKey(job_id * 1000 + r)
         positions, orientations = rsa_2d(
             args.num_particles, BOX_SIZE_YIELD, seed=job_id * 1000 + r, centered=False,
         )
-        final_state, pos_traj, ori_traj, e_traj = run_many_particle_md(
+        # One HDF5 file per realization; rerunning the job resumes from the
+        # file's restart group (a finished file is left untouched).
+        run_many_particle_md(
             args.num_particles, BOX_SIZE_YIELD, params, args.num_steps, kT, key, DT,
             positions, orientations,
             sample_interval=args.sample_interval,
             equilibration_steps=args.equilibration_steps,
-            checkpoint_dir=ckpt_dir, checkpoint_prefix='ckpt',
+            equilibration_sample_interval=args.equilibration_sample_interval,
+            trajectory_path=out_dir / f'{stem}_r{r}.h5', resume=True,
+            precision=args.precision, seed=job_id * 1000 + r,
             checkpoint_interval=args.checkpoint_interval,
         )
-        pos_traj, ori_traj, e_traj = np.array(pos_traj), np.array(ori_traj), np.array(e_traj)
-        all_pos.append(pos_traj)
-        all_ori.append(ori_traj)
-        all_e.append(e_traj)
-
-        avg_y, avg_c, n_frames = compute_realization_yields(pos_traj, ori_traj, params)
+        with open_trajectory(out_dir / f'{stem}_r{r}.h5') as reader:
+            avg_y, avg_c, n_frames = compute_realization_yields(reader, params)
         all_yields.append(avg_y)
         all_counts.append(avg_c)
         all_nframes.append(n_frames)
         print(f"  Y_tri={avg_y['triangle']:.4f}  Y_sq={avg_y['square']:.4f}")
 
-        ckpt_file = ckpt_dir / 'ckpt.npz'
-        if ckpt_file.exists():
-            ckpt_file.unlink()
-
     total_elapsed = (datetime.now() - t_start).total_seconds()
     print(f"\nAll {args.realizations} realizations done in {total_elapsed:.1f}s")
 
-    traj_file = out_dir / f'job_{job_id:04d}_alpha{alpha_deg:.0f}_zeta{zeta:.2f}_trajectory.npz'
-    traj_data = {
-        'alpha_deg': alpha_deg, 'selectivity': zeta, 'box_size': BOX_SIZE_YIELD,
-        'num_realizations': args.realizations, 'sample_interval': args.sample_interval,
-        'equilibration_steps': args.equilibration_steps,
-        'num_production_steps': args.num_steps,
-    }
-    for r in range(args.realizations):
-        traj_data[f'r{r}_positions'] = all_pos[r]
-        traj_data[f'r{r}_orientations'] = all_ori[r]
-        traj_data[f'r{r}_energy'] = all_e[r]
-    np.savez_compressed(traj_file, **traj_data)
-    print(f"Saved trajectory: {traj_file}")
-
-    yields_file = out_dir / f'job_{job_id:04d}_alpha{alpha_deg:.0f}_zeta{zeta:.2f}_yields.npz'
+    yields_file = out_dir / f'{stem}_yields.npz'
     yd = {
         'job_id': job_id, 'alpha_deg': alpha_deg, 'selectivity': zeta,
         'num_realizations': args.realizations,

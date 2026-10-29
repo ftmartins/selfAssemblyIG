@@ -89,6 +89,7 @@ class YieldDefaults:
     equilibration_steps: int = 2_000_000
     sample_interval: int = 100
     checkpoint_interval: int = 10_000
+    equilibration_sample_interval: int = 20_000   # sparse thinning of equilibration frames
 
 
 DEFAULTS = YieldDefaults()
