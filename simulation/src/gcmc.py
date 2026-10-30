@@ -11,14 +11,14 @@ Public API
 MCMCState, make_gcmc_params, GcmcDefaults
 generate_ic         random-sequential-addition initial condition (+ MB velocities)
 mc_sweep            one hybrid GCMC sweep -> (MCMCState, stats)
-run_gcmc            equilibration + production loop with checkpointing
-save_checkpoint / load_checkpoint
+run_gcmc            equilibration + production loop streaming to the HDF5 store
 
 Energy primitives (periodic, params-dict) live in :mod:`base.energy`.
 """
 from __future__ import annotations
 
 import functools
+import json
 import os
 from dataclasses import dataclass
 
@@ -39,7 +39,7 @@ __all__ = [
     "MCMCState", "make_gcmc_params", "GcmcDefaults",
     "generate_ic", "mc_sweep", "run_gcmc",
     "md_displacement", "mc_insertion", "mc_deletion",
-    "save_checkpoint", "load_checkpoint", "total_energy_pbc",
+    "total_energy_pbc",
 ]
 
 
@@ -291,145 +291,140 @@ def generate_ic(N, L, params, kT=1.0, seed=42, max_att=20_000) -> MCMCState:
     return MCMCState(q=q, v=v)
 
 
-# ── Utility ──────────────────────────────────────────────────────────────
-
-def _to_object_array(lst: list) -> np.ndarray:
-    arr = np.empty(len(lst), dtype=object)
-    for i, x in enumerate(lst):
-        arr[i] = x
-    return arr
-
-
-# ── Checkpoint ───────────────────────────────────────────────────────────
-
-def save_checkpoint(checkpoint_file, state, rng, phase, sweep,
-                    N_traj_partial, E_list, snap_sweeps, snapshots,
-                    acc_md_list, acc_ins_list, acc_del_list, md_E_list) -> None:
-    data = dict(
-        q=state.q.copy(), v=state.v.copy(),
-        rng_state=rng.bit_generator.state,
-        phase=phase, sweep=sweep,
-        N_traj_partial=N_traj_partial.copy(),
-        E_list=np.array(E_list, np.float32),
-        snap_sweeps=np.array(snap_sweeps, np.int32),
-        snapshots=_to_object_array(snapshots),
-        acc_md_list=np.array(acc_md_list),
-        acc_ins_list=np.array(acc_ins_list),
-        acc_del_list=np.array(acc_del_list),
-        md_E_list=np.array(md_E_list, dtype=object) if md_E_list else np.empty(0),
-    )
-    np.save(checkpoint_file, data, allow_pickle=True)
-    print(f'  [checkpoint] saved  phase={phase}  sweep={sweep}  N={state.N}')
-
-
-def load_checkpoint(checkpoint_file, rng):
-    if not checkpoint_file or not os.path.exists(checkpoint_file):
-        return None
-    data = np.load(checkpoint_file, allow_pickle=True).item()
-    rng.bit_generator.state = data['rng_state']
-    print(f'  [checkpoint] resumed  phase={data["phase"]}  sweep={data["sweep"]}'
-          f'  N={len(data["q"])}')
-    return data
-
-
 # ── High-level loop ──────────────────────────────────────────────────────
+
+_COUNTERS = ('nd', 'ni', 'nl', 'ad', 'ai', 'al')
+
+
+def _acceptance(c):
+    """(displacement, insertion, deletion) acceptance rates from the counters."""
+    def rate(a, n, default):
+        return a / n if n else default
+    return (rate(c['ad'], c['nd'], 1.0), rate(c['ai'], c['ni'], 0.0),
+            rate(c['al'], c['nl'], 0.0))
+
 
 def run_gcmc(state, L, kT, mu, params, rng, n_equil, n_prod,
              f_disp=0.5, MD_STEPS=5000, MD_DT=1e-2, GAMMA=1.0,
              snapshot_interval=1, dump_md_energies=False, md_energy_chunks=10,
-             verbose=True, checkpoint_file=None, checkpoint_interval=None) -> dict:
-    """Full GCMC run: equilibration (unrecorded) then production (recorded).
+             verbose=True, trajectory_path=None, attrs=None, resume=False,
+             precision='float64', equilibration_sample_interval=0,
+             checkpoint_interval=None) -> dict:
+    """Full GCMC run: ``n_equil`` equilibration sweeps then ``n_prod``
+    production sweeps.
 
-    Returns a dict with ``N_traj``, ``E_traj``, ``snapshot_sweeps``,
-    ``snapshots``, ``acc_md/ins/del``, ``final_state``, ``q_final`` (and
-    ``md_E_traj`` / ``md_q_traj`` when ``dump_md_energies``).
+    With ``trajectory_path`` every sampled frame is streamed to the HDF5
+    trajectory store (:mod:`base.trajectory`, the same schema the canonical
+    engine writes): production frames every ``snapshot_interval`` sweeps
+    (including sweep 0), equilibration frames every
+    ``equilibration_sample_interval`` sweeps (0 = none).  Frame ``step`` is the
+    sweep count within the phase; N varies per frame via the store's offsets.
+    Positions are stored wrapped into ``[0, L)``.  A restart (MD state, RNG
+    state, acceptance counters) is written every ``checkpoint_interval``
+    sweeps (default ``snapshot_interval``); ``resume=True`` continues from it
+    without duplicating frames.  Production acceptance rates
+    (``acc_insertion``, ``acc_deletion``, ``acc_displacement``) are stored as
+    root attributes.
+
+    Returns a dict with ``N_traj`` / ``E_traj`` (production frames after
+    sweep 0), ``acc_md/ins/del``, ``final_state``, ``q_final`` (and
+    ``md_E_traj`` / ``md_q_traj`` when ``dump_md_energies``; these are not
+    resumable).
     """
-    ckpt_interval = checkpoint_interval if checkpoint_interval is not None else snapshot_interval
+    from base.trajectory import TrajectoryWriter
+    ckpt_interval = checkpoint_interval or snapshot_interval
+    sweep_kwargs = dict(f_disp=f_disp, MD_STEPS=MD_STEPS, MD_DT=MD_DT, GAMMA=GAMMA)
+    counters = dict.fromkeys(_COUNTERS, 0)
+    N_list, E_list, md_E_list, md_q_list = [], [], [], []
 
-    sweep_kwargs = dict(f_disp=f_disp, MD_STEPS=MD_STEPS, MD_DT=MD_DT, GAMMA=GAMMA,
-                        dump_md_energies=False)
-    prod_sweep_kwargs = dict(f_disp=f_disp, MD_STEPS=MD_STEPS, MD_DT=MD_DT, GAMMA=GAMMA,
-                             dump_md_energies=dump_md_energies,
-                             md_energy_chunks=md_energy_chunks)
+    writer = None
+    if trajectory_path is not None:
+        writer = TrajectoryWriter(trajectory_path, attrs, resume=resume,
+                                  precision=precision)
 
-    ckpt = load_checkpoint(checkpoint_file, rng) if checkpoint_file else None
-    if ckpt is not None:
-        state = MCMCState(q=ckpt['q'], v=ckpt['v'])
-        start_phase = str(ckpt['phase'])
-        start_sweep = int(ckpt['sweep']) + 1
-        N_traj = np.zeros(n_prod, np.int32)
-        N_traj[:len(ckpt['N_traj_partial'])] = ckpt['N_traj_partial']
-        E_list = list(ckpt['E_list'])
-        snap_sweeps = list(ckpt['snap_sweeps'])
-        snapshots = list(ckpt['snapshots'])
-        acc_md_list = list(ckpt['acc_md_list'])
-        acc_ins_list = list(ckpt['acc_ins_list'])
-        acc_del_list = list(ckpt['acc_del_list'])
-        md_E_list = list(ckpt['md_E_list']) if ckpt['md_E_list'].size > 0 else []
-        md_q_list = []
-    else:
-        start_phase, start_sweep = 'eq', 0
-        N_traj = np.empty(n_prod, np.int32)
-        E_list, snap_sweeps, snapshots = [], [], []
-        acc_md_list, acc_ins_list, acc_del_list = [], [], []
-        md_E_list, md_q_list = [], []
+    phase, done = 'equilibration', 0
+    if writer is not None and writer.restart is not None:
+        phase, done, leaves, extra = writer.restart[:4]
+        state = MCMCState(q=leaves[0], v=leaves[1])
+        rng.bit_generator.state = json.loads(extra['rng_state'])
+        counters = json.loads(extra['counters'])
+        if verbose:
+            print(f'  [resume] phase={phase} sweep={done} N={state.N}')
 
-    eq_start = start_sweep if start_phase == 'eq' else n_equil
-    prod_start = start_sweep if start_phase == 'prod' else 0
+    def record(st, name, step):
+        E = float(total_energy_pbc(st.q, L, params))
+        if writer is not None:
+            pos = np.mod(st.q[:, :2] + L / 2.0, L)      # centred box -> [0, L)
+            writer.append_frame(pos, st.q[:, 2], E, step, phase=name)
+        return E
 
-    def _save(phase, s):
-        if checkpoint_file is None:
-            return
-        save_checkpoint(
-            checkpoint_file, state, rng, phase, s,
-            N_traj[:s + 1] if phase == 'prod' else N_traj[:0],
-            E_list, snap_sweeps, snapshots,
-            acc_md_list, acc_ins_list, acc_del_list, md_E_list,
-        )
+    def checkpoint(st, name, step):
+        if writer is not None:
+            writer.write_restart(
+                name, step, [st.q, st.v],
+                rng_state=json.dumps(rng.bit_generator.state),
+                counters=json.dumps(counters))
 
-    if eq_start < n_equil:
-        for s in range(eq_start, n_equil):
-            state, _ = mc_sweep(state, L, kT, mu, params, rng, **sweep_kwargs)
-            if verbose and (s + 1) % max(1, n_equil // 10) == 0:
-                print(f'  equil {s + 1:6d}/{n_equil}  N={state.N}')
-            if checkpoint_file and (s + 1) % ckpt_interval == 0:
-                _save('eq', s)
+    def sweep(st, **kw):
+        st, stats = mc_sweep(st, L, kT, mu, params, rng, **sweep_kwargs, **kw)
+        for k in _COUNTERS:
+            counters[k] += stats[k]
+        return st, stats
 
-    for s in tqdm(range(prod_start, n_prod)):
-        state, stats = mc_sweep(state, L, kT, mu, params, rng, **prod_sweep_kwargs)
-        N_traj[s] = state.N
-        if stats['nd'] > 0:
-            acc_md_list.append(stats['ad'] / stats['nd'])
-        if stats['ni'] > 0:
-            acc_ins_list.append(stats['ai'] / stats['ni'])
-        if stats['nl'] > 0:
-            acc_del_list.append(stats['al'] / stats['nl'])
-        if dump_md_energies and stats.get('md_E_trajs'):
-            md_E_list.extend(stats['md_E_trajs'])
-            md_q_list.extend(stats['md_q_trajs'])
-        if (s + 1) % snapshot_interval == 0:
-            E_now = total_energy_pbc(state.q, L, params)
-            E_list.append(np.float32(E_now))
-            snap_sweeps.append(s + 1)
-            snapshots.append(state.q.copy())
-            if verbose and (s + 1) % max(1, n_prod // 10) == 0:
-                print(f'  prod  {s + 1:6d}/{n_prod}  N={state.N}  '
-                      f'E/N={E_now / max(state.N, 1):.2f}')
-            if checkpoint_file and (s + 1) % ckpt_interval == 0:
-                _save('prod', s)
+    try:
+        if phase == 'equilibration':
+            eq_int = equilibration_sample_interval if writer is not None else 0
+            if eq_int > 0 and done == 0 and writer.n_frames('equilibration') == 0:
+                record(state, 'equilibration', 0)
+            for s in range(done, n_equil):
+                state, _ = sweep(state)
+                if eq_int > 0 and (s + 1) % eq_int == 0:
+                    record(state, 'equilibration', s + 1)
+                if verbose and (s + 1) % max(1, n_equil // 10) == 0:
+                    print(f'  equil {s + 1:6d}/{n_equil}  N={state.N}')
+                if (s + 1) % ckpt_interval == 0 and s + 1 < n_equil:
+                    checkpoint(state, 'equilibration', s + 1)
+            # equilibration moves are not part of the reported production rates
+            counters = dict.fromkeys(_COUNTERS, 0)
+            phase, done = 'production', 0
+            if writer is not None:
+                record(state, 'production', 0)
+            checkpoint(state, 'production', 0)
 
-    if checkpoint_file and os.path.exists(checkpoint_file):
-        os.remove(checkpoint_file)
-        print('[checkpoint] simulation complete, checkpoint removed.')
+        if phase == 'production':
+            if writer is not None and done == 0 and writer.n_frames('production') == 0:
+                record(state, 'production', 0)
+            for s in tqdm(range(done, n_prod), disable=not verbose):
+                state, stats = sweep(state, dump_md_energies=dump_md_energies,
+                                     md_energy_chunks=md_energy_chunks)
+                if dump_md_energies and stats.get('md_E_trajs'):
+                    md_E_list.extend(stats['md_E_trajs'])
+                    md_q_list.extend(stats['md_q_trajs'])
+                if (s + 1) % snapshot_interval == 0:
+                    E_now = record(state, 'production', s + 1)
+                    N_list.append(state.N)
+                    E_list.append(E_now)
+                    if verbose and (s + 1) % max(1, n_prod // 10) == 0:
+                        print(f'  prod  {s + 1:6d}/{n_prod}  N={state.N}  '
+                              f'E/N={E_now / max(state.N, 1):.2f}')
+                if (s + 1) % ckpt_interval == 0 and s + 1 < n_prod:
+                    checkpoint(state, 'production', s + 1)
+
+        acc_md, acc_ins, acc_del = _acceptance(counters)
+        if writer is not None and phase != 'done':
+            writer.set_attrs(acc_displacement=acc_md, acc_insertion=acc_ins,
+                             acc_deletion=acc_del)
+            checkpoint(state, 'done', n_prod)
+            N_list = [int(n) for n in writer._f['production']['N'][1:]]
+            E_list = list(writer._f['production']['potential_energy'][1:])
+    finally:
+        if writer is not None:
+            writer.close()
 
     result = {
-        'N_traj': N_traj,
+        'N_traj': np.array(N_list, np.int32),
         'E_traj': np.array(E_list, np.float32),
-        'snapshot_sweeps': np.array(snap_sweeps, np.int32),
-        'snapshots': snapshots,
-        'acc_md': float(np.mean(acc_md_list)) if acc_md_list else 1.0,
-        'acc_ins': float(np.mean(acc_ins_list)) if acc_ins_list else 0.0,
-        'acc_del': float(np.mean(acc_del_list)) if acc_del_list else 0.0,
+        'acc_md': float(acc_md), 'acc_ins': float(acc_ins), 'acc_del': float(acc_del),
         'final_state': state,
         'q_final': state.q.copy(),
     }
@@ -438,5 +433,5 @@ def run_gcmc(state, L, kT, mu, params, rng, n_equil, n_prod,
             np.array(md_E_list, np.float32) if md_E_list
             else np.zeros((0, md_energy_chunks), np.float32)
         )
-        result['md_q_traj'] = _to_object_array(md_q_list) if md_q_list else np.empty(0, dtype=object)
+        result['md_q_traj'] = md_q_list
     return result

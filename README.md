@@ -27,12 +27,13 @@ base/                    shared primitives — importable with zero side effects
 simulation/
   src/
     gcmc.py              hybrid GCMC (µVT) engine: MCMCState, mc_sweep, run_gcmc
+    run.py               unified entry run_simulation(ensemble, path, ...)
     canonical_md.py      NVT Nose-Hoover drivers: run_sim/my_sim (rigid body),
                          run_many_particle_md (chunked + checkpointed),
                          md_relax_system
     design.py            DesignConfig + make_loss_fns + optimize / random_search
   runners/               thin CLI entrypoints (each: sys.path + configure_jax)
-    run_gcmc.py  scan_mu.py  run_yield.py  run_yield_cluster.py
+    run.py (--ensemble canonical|grand_canonical)  run_gcmc.py  scan_mu.py  run_yield.py  run_yield_cluster.py
     optimize_design.py  make_initial_condition.py  preview_grid.py
     slurm/              SLURM array wrappers
 
@@ -78,7 +79,15 @@ python analysis/aggregate_mu_scan.py --input_dir data/mu_scan --E_AB 5 --opening
 # full run at a chosen mu
 python simulation/runners/run_gcmc.py \
     --opening_angle 1.5708 --E_AB 5.0 --mu -4.0 --n_equil 20000 --n_prod 10000
-# → data/gcmc_runs/oa90.00deg_EAB5.000_mu-4.0000_kT1.0_r000/run.npz
+# → data/gcmc_runs/oa90.00deg_EAB5.000_mu-4.0000_kT1.0_r000/run.h5
+# (same HDF5 schema as NVT; N varies per frame, acceptance rates are root
+#  attributes; rerunning resumes the file; --no_checkpoint starts afresh)
+
+# either ensemble through one command
+python simulation/runners/run.py --ensemble grand_canonical \
+    --opening_angle 1.5708 --E_AB 5.0 --mu -4.0 --output data/run_gc.h5
+python simulation/runners/run.py --ensemble canonical \
+    --opening_angle 1.5708 --E_AB 5.0 --box_area 100 --N 40 --output data/run_nvt.h5
 
 # phase-diagram sweep
 MU=-4.0 sbatch simulation/runners/slurm/submit_gcmc.sh
