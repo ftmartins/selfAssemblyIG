@@ -61,3 +61,36 @@ def test_comparison_overlays_two_runs_with_shared_colours(tmp_path):
     assert {t.get_text() for t in ax.get_legend().get_texts()} == {'dispersed', 'pre-assembled'}
     with pytest.raises(ValueError):
         ep.comparison_figure({'only': a})
+
+
+def test_empty_frames_keep_panels_aligned(tmp_path):
+    from base.trajectory import TrajectoryWriter
+    p = tmp_path / 'gc.h5'
+    with TrajectoryWriter(p, dict(ensemble='grand_canonical', box_size=40.0,
+                                  opening_angle=THETA, seed=0)) as w:
+        for i in range(30):
+            pos, ori = (np.zeros((0, 2)), np.zeros(0)) if i % 5 == 0 else \
+                stack(ring(4, (10, 10)), monomers([(5, 30)]) if i % 2 else monomers([(5, 30), (30, 5)]))
+            w.append_frame(pos, ori, float(i % 3), step=i)
+    fig = ep.timeseries_figure(p)
+    xs = [tuple(ax.lines[0].get_xdata()) for ax in fig.axes]
+    assert all(x == xs[0] for x in xs) and 0 not in xs[0] and len(xs[0]) == 24
+    assert all(len(ax.lines[0].get_ydata()) == 24 for ax in fig.axes)
+
+
+def test_ring2_colour_is_distinct():
+    cols = [sp.structure_color(f'ring_{n}') for n in range(2, 13)] + [sp.structure_color('ring_13+')]
+    assert len(set(cols)) == len(cols)
+
+
+def test_report_classifies_each_file_once_per_distance(tmp_path, monkeypatch):
+    from analysis import bond_graph, equilibrium, report
+    a, b = make(tmp_path / 'a.h5', 2), make(tmp_path / 'b.h5', 2)
+    calls = []
+    real = bond_graph.classify_frame
+    monkeypatch.setattr(bond_graph, 'classify_frame',
+                        lambda *x, **k: (calls.append(1), real(*x, **k))[1])
+    report.build_report(a, tmp_path / 'r', seeds=[b], preassembled=b, gif=False)
+    # a: 3 distances; b: once (shared by seed and pre-assembled use); plus 1 snapshot
+    n_frames = 40
+    assert len(calls) <= n_frames * (3 + 1 + 1) + 5

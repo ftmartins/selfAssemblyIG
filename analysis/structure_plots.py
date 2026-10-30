@@ -39,6 +39,7 @@ from base.trajectory import open_trajectory
 # Paul Tol "muted" + two Okabe-Ito colours: ring sizes 3..11, 12, 13+
 _RING_COLORS = ['#CC6677', '#332288', '#DDCC77', '#117733', '#88CCEE', '#882255',
                 '#44AA99', '#999933', '#AA4499', '#E69F00', '#0072B2']
+_RING2_COLOR = '#8C510A'
 _NEUTRAL = {'monomer': '#DDDDDD', 'chain': '#999999'}
 PATCH_A_COLOR, PATCH_B_COLOR = '#D55E00', '#0072B2'    # vermillion / blue (Okabe-Ito)
 DPI = 100
@@ -52,6 +53,8 @@ def structure_color(label):
     if kind == 'chain':
         return _NEUTRAL['chain']
     n = 13 if size.endswith('+') else int(size)
+    if n < 3:                       # 2-particle double-bonded ring
+        return _RING2_COLOR
     return _RING_COLORS[min(n, 13) - 3]
 
 

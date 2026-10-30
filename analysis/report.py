@@ -75,8 +75,9 @@ def build_report(path, outdir=None, seeds=(), preassembled=None, bond_distance=N
     kw = dict(bond_distance=bond_distance, n_blocks=n_blocks)
 
     main = compute_yields(path, **kw)
-    combined = combine_seeds([main] + [compute_yields(p, **kw) for p in seeds]) \
-        if seeds else main
+    seed_yields = {Path(p).stem: compute_yields(p, **kw) for p in seeds}
+    pre = compute_yields(preassembled, **kw) if preassembled is not None else None
+    combined = combine_seeds([main, *seed_yields.values()]) if seeds else main
     rec = yields_record(combined)
     np.savez(out / f'job_{stem}_yields.npz', **rec)
     (out / 'yields.json').write_text(json.dumps(dict(
@@ -86,18 +87,18 @@ def build_report(path, outdir=None, seeds=(), preassembled=None, bond_distance=N
         cluster_yield=combined.cluster_yield, cluster_yield_err=combined.cluster_yield_err,
     ), indent=2))
 
-    report = eq.run_checks(path, other_seeds=seeds, preassembled=preassembled, save=False,
-                           **kw)
+    report = eq.run_checks(path, other_seeds=list(seed_yields.values()), preassembled=pre,
+                           save=False, main=main, **kw)
     report.save(out / 'equilibrium.json')
 
     sp.snapshot(path, -1, out_dir=out, bond_distance=bond_distance)
     for kind in ('particle', 'cluster'):
         sp.yield_histogram(combined, kind, out, stem=stem)
-    ep.timeseries_figure(path, out, report=report, **kw)
+    ep.timeseries_figure(path, out, report=report, yields_=main, **kw)
     runs = {stem: combined}
-    runs.update({Path(p).stem: compute_yields(p, **kw) for p in seeds})
-    if preassembled is not None:
-        runs['pre-assembled'] = compute_yields(preassembled, **kw)
+    runs.update(seed_yields)
+    if pre is not None:
+        runs['pre-assembled'] = pre
     if len(runs) > 1:
         ep.comparison_figure(runs, out)
     if gif:

@@ -178,13 +178,16 @@ def seed_agreement(per_seed_yields, **kw):
 
 def bond_distance_sensitivity(source, factors=(0.9, 1.0, 1.1), tol=0.05,
                               name='bond_distance_sensitivity', center=PATCH_RADIUS,
-                              **yield_kw):
+                              reference=None, **yield_kw):
     """Yields at bond distances ``factor * center`` (default the patch radius); passes if no
-    structure's particle yield moves by more than ``tol`` across ``factors``."""
+    structure's particle yield moves by more than ``tol`` across ``factors``.
+    ``reference`` is the already computed :class:`~analysis.bond_graph.Yields` at
+    ``factor = 1`` (same ``yield_kw``), reused instead of reclassifying."""
     owned = isinstance(source, (str, Path))
     reader = open_trajectory(source) if owned else source
     try:
-        ys = [compute_yields(reader, bond_distance=f * center, **yield_kw)
+        ys = [reference if (reference is not None and f == 1.0)
+              else compute_yields(reader, bond_distance=f * center, **yield_kw)
               for f in factors]
     finally:
         if owned:
@@ -199,18 +202,23 @@ def bond_distance_sensitivity(source, factors=(0.9, 1.0, 1.1), tol=0.05,
 # ── driver ─────────────────────────────────────────────────────────────────
 
 def run_checks(trajectory_path, other_seeds=(), preassembled=None, save=True,
-               min_yield=0.02, **yield_kw):
+               min_yield=0.02, main=None, **yield_kw):
     """All checks for one trajectory file.
 
     Stationarity is tested for the potential energy and for every structure
     whose mean particle yield exceeds ``min_yield``.  ``other_seeds`` are
     further trajectory files at the same parameters (seed agreement) and
     ``preassembled`` is a trajectory from a pre-assembled start (forward/
-    backward).  The report is saved to ``report_path(trajectory_path)``.
+    backward); both may be paths or precomputed ``Yields``, as may ``main`` (the
+    yields of ``trajectory_path``), so nothing is classified twice.  The report
+    is saved to ``report_path(trajectory_path)``.
     """
+    def get(x):
+        return x if hasattr(x, 'particle_yield') else compute_yields(x, **yield_kw)
+
     report = EquilibriumReport(meta=dict(trajectory=str(trajectory_path)))
     with open_trajectory(trajectory_path) as r:
-        main = compute_yields(r, **yield_kw)
+        main = main if main is not None else compute_yields(r, **yield_kw)
         energy = r.series('production', 'potential_energy')
         report.meta['n_frames'] = main.n_frames
         if len(energy) >= MIN_STATIONARITY_POINTS:     # shorter runs: no verdict
@@ -222,13 +230,12 @@ def run_checks(trajectory_path, other_seeds=(), preassembled=None, save=True,
         report.add(CheckResult('autocorrelation', True, dict(
             tau_int_energy=tau, n_independent=len(energy) / tau)))
         report.add(bond_distance_sensitivity(
-            r, center=yield_kw.get('bond_distance') or PATCH_RADIUS,
+            r, center=yield_kw.get('bond_distance') or PATCH_RADIUS, reference=main,
             **{k: v for k, v in yield_kw.items() if k != 'bond_distance'}))
     if other_seeds:
-        report.add(seed_agreement([main] + [compute_yields(p, **yield_kw)
-                                            for p in other_seeds]))
+        report.add(seed_agreement([main] + [get(p) for p in other_seeds]))
     if preassembled is not None:
-        report.add(forward_backward(main, compute_yields(preassembled, **yield_kw)))
+        report.add(forward_backward(main, get(preassembled)))
     if save:
         report.save(report_path(trajectory_path))
     return report

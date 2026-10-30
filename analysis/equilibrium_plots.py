@@ -37,20 +37,25 @@ def _annotate(ax, result):
 
 
 def timeseries_figure(source, out_dir=None, phase='production', min_yield=0.02,
-                      figsize=(7.0, 2.2), report=None, **yield_kw):
+                      figsize=(7.0, 2.2), report=None, yields_=None, **yield_kw):
     """Time-series figure with stationarity annotations.  ``report`` (an
     :class:`~analysis.equilibrium.EquilibriumReport`) supplies verdicts when
-    given, otherwise they are computed here."""
+    given, otherwise they are computed here.  ``yields_`` reuses precomputed
+    yields of ``source``.  Empty (N = 0) frames are dropped from every panel and
+    the x-axis is the original frame index, so panels stay aligned."""
     owned = isinstance(source, (str, Path))
     reader = _open(source)
     try:
-        y = compute_yields(reader, phase=phase, **yield_kw)
+        y = yields_ if yields_ is not None else compute_yields(reader, phase=phase,
+                                                               **yield_kw)
         energy = reader.series(phase, 'potential_energy')
         n_series = reader.series(phase, 'N').astype(float)
     finally:
         if owned:
             reader.close()
-    n_series = n_series[n_series > 0]
+    keep = n_series > 0
+    frame_idx = np.flatnonzero(keep)
+    energy, n_series = energy[keep], n_series[keep]
     bonded = 1.0 - y.particle_series['monomer'] if 'monomer' in y.particle_series \
         else np.ones(y.n_frames)
     panels = [('potential energy', energy, '#333333', 'stationarity:potential_energy')]
@@ -64,7 +69,7 @@ def timeseries_figure(source, out_dir=None, phase='production', min_yield=0.02,
     fig = Figure(figsize=(figsize[0], figsize[1] * (len(panels) + 1)))
     axes = fig.subplots(len(panels) + 1, 1, sharex=True)
     for ax, (name, ser, col, key) in zip(axes, panels):
-        ax.plot(ser, color=col, lw=0.8)
+        ax.plot(frame_idx, ser, color=col, lw=0.8)
         ax.set_ylabel(name, fontsize=8)
         if report is not None and key in report.checks:
             _annotate(ax, report.checks[key])
@@ -72,7 +77,7 @@ def timeseries_figure(source, out_dir=None, phase='production', min_yield=0.02,
             _annotate(ax, eq.stationarity(ser, name=key))
     ax = axes[-1]
     for k in labels:
-        ax.plot(y.cluster_series[k], color=structure_color(k), lw=1.0, label=k)
+        ax.plot(frame_idx, y.cluster_series[k], color=structure_color(k), lw=1.0, label=k)
     ax.set_ylabel('cluster yield', fontsize=8)
     ax.set_xlabel('frame')
     if labels:
