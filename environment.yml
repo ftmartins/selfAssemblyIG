@@ -1,0 +1,41 @@
+name: patchy_particles
+channels:
+  - conda-forge
+  - defaults
+
+dependencies:
+  - python=3.11
+  # numerics / plotting
+  - numpy=2.3.5
+  - scipy=1.16.3
+  - matplotlib=3.10.7
+  - pandas=2.3.3
+  # analysis
+  - freud=3.4.0          # conda-forge: freud-analysis
+  - tqdm=4.67.1
+  - networkx=3.5
+  # jupyter
+  - ipykernel=7.1.0
+  - jupyter_client=8.6.3
+  - jupyter_core=5.9.1
+  # misc
+  - pyyaml=6.0.3
+  - pip
+
+  - pip:
+    # JAX (CPU build — swap jaxlib for jaxlib[cuda12] on GPU nodes)
+    - jax==0.8.1
+    - jaxlib==0.8.1
+    - jax-md==0.2.27
+    # JAX ecosystem
+    - chex==0.1.91
+    - optax==0.2.6
+    - flax==0.12.1
+    - orbax-checkpoint==0.11.28
+    - dm-haiku==0.0.15
+    # utilities
+    - ml_collections==1.1.0
+    - ml_dtypes==0.5.4
+    - opt_einsum==3.4.0
+    - toolz==1.1.0
+    - einops==0.8.1
