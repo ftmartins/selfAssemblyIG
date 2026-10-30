@@ -203,9 +203,11 @@ def _all_labels(ys, kind):
     return sorted({k for y in ys for k in getattr(y, f'{kind}_yield')}, key=_label_order)
 
 
-def yield_histogram(source, kind='particle', out_dir=None, figsize=(6.4, 4.0), **yield_kw):
+def yield_histogram(source, kind='particle', out_dir=None, figsize=(6.4, 4.0), stem=None,
+                    **yield_kw):
     """Particle- or cluster-yield histogram by structure with error bars.
-    ``source`` is a trajectory (path or reader) or a precomputed ``Yields``."""
+    ``source`` is a trajectory (path or reader) or a precomputed ``Yields`` (then
+    pass ``stem`` to name the file)."""
     y = source if hasattr(source, 'particle_yield') else compute_yields(
         source, **yield_kw)
     fig = Figure(figsize=figsize)
@@ -214,7 +216,7 @@ def yield_histogram(source, kind='particle', out_dir=None, figsize=(6.4, 4.0), *
     ax.set_title(f'{kind} yield  ({y.n_frames} frames, {y.n_seeds} seed'
                  f'{"s" if y.n_seeds != 1 else ""})', fontsize=10)
     fig.tight_layout()
-    return _finish(fig, out_dir, f'{_stem(source)}_yield_{kind}.png')
+    return _finish(fig, out_dir, f'{stem or _stem(source)}_yield_{kind}.png')
 
 
 def yield_grid(points, kind='particle', out_dir=None, ncols=3, panel=(3.2, 2.6),

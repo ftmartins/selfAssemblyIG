@@ -158,7 +158,8 @@ v_random_IC = vmap(random_IC, in_axes=(None, 0, None, None))
 # ══════════════════════════════════════════════════════════════════════════
 
 def _model_attrs(params, num_particles, box_size, num_steps, equilibration_steps,
-                 kT, dt, sample_interval, equilibration_sample_interval, seed):
+                 kT, dt, sample_interval, equilibration_sample_interval, seed,
+                 initial_condition):
     E_AA, E_BB, E_AB = float(params.E_RR), float(params.E_BB), float(params.E_RB)
     return dict(
         ensemble='canonical', engine='nvt_nose_hoover', thermostat='nose_hoover_chain',
@@ -170,6 +171,7 @@ def _model_attrs(params, num_particles, box_size, num_steps, equilibration_steps
         num_production_steps=int(num_steps),
         sample_interval=int(sample_interval),
         equilibration_sample_interval=int(equilibration_sample_interval),
+        initial_condition=initial_condition,
     )
 
 
@@ -178,7 +180,8 @@ def run_many_particle_md(num_particles, box_size, params, num_steps, kT, key, dt
                          sample_interval=100, equilibration_steps=0,
                          equilibration_sample_interval=0,
                          trajectory_path=None, resume=False, precision='float64',
-                         checkpoint_interval=200_000, seed=None):
+                         checkpoint_interval=200_000, seed=None,
+                         initial_condition='dispersed'):
     """
     Many-particle NVT MD, chunked, streaming every sampled frame to the HDF5
     trajectory store (:mod:`base.trajectory`) at ``trajectory_path``.
@@ -193,6 +196,9 @@ def run_many_particle_md(num_particles, box_size, params, num_steps, kT, key, dt
     restart, frames written after it are dropped and recomputed, so no frame is
     duplicated.  When the run completes the restart group holds the final state
     (phase ``'done'``).
+
+    ``initial_condition`` (``'dispersed'`` / ``'preassembled'``) is recorded as a
+    root attribute only; the caller builds the start.
 
     Returns the final MD state.
     """
@@ -224,7 +230,8 @@ def run_many_particle_md(num_particles, box_size, params, num_steps, kT, key, dt
         return lax.scan(body, st, None, length=n_samples)
 
     attrs = _model_attrs(params, num_particles, box_size, num_steps, equilibration_steps,
-                         kT, dt, sample_interval, equilibration_sample_interval, seed)
+                         kT, dt, sample_interval, equilibration_sample_interval, seed,
+                         initial_condition)
     writer = TrajectoryWriter(trajectory_path, attrs, resume=resume, precision=precision)
 
     def record(st, phase, step):

@@ -173,11 +173,12 @@ def seed_agreement(per_seed_yields, **kw):
 
 
 def bond_distance_sensitivity(source, factors=(0.9, 1.0, 1.1), tol=0.05,
-                              name='bond_distance_sensitivity', **yield_kw):
-    """Yields at bond distances ``factor * patch radius``; passes if no
+                              name='bond_distance_sensitivity', center=PATCH_RADIUS,
+                              **yield_kw):
+    """Yields at bond distances ``factor * center`` (default the patch radius); passes if no
     structure's particle yield moves by more than ``tol`` across ``factors``."""
     reader = open_trajectory(source) if isinstance(source, (str, Path)) else source
-    ys = [compute_yields(reader, bond_distance=f * PATCH_RADIUS, **yield_kw)
+    ys = [compute_yields(reader, bond_distance=f * center, **yield_kw)
           for f in factors]
     labels = sorted({k for y in ys for k in y.particle_yield})
     spread = {k: float(np.ptp([y.particle_yield.get(k, 0.0) for y in ys]))
@@ -210,7 +211,9 @@ def run_checks(trajectory_path, other_seeds=(), preassembled=None, save=True,
         tau = integrated_autocorrelation_time(energy)
         report.add(CheckResult('autocorrelation', True, dict(
             tau_int_energy=tau, n_independent=len(energy) / tau)))
-        report.add(bond_distance_sensitivity(r, **yield_kw))
+        report.add(bond_distance_sensitivity(
+            r, center=yield_kw.get('bond_distance') or PATCH_RADIUS,
+            **{k: v for k, v in yield_kw.items() if k != 'bond_distance'}))
     if other_seeds:
         report.add(seed_agreement([main] + [compute_yields(p, **yield_kw)
                                             for p in other_seeds]))

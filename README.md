@@ -38,6 +38,10 @@ simulation/
     slurm/              SLURM array wrappers
 
 analysis/
+  report.py              one command: yields + checks + plots -> report directory
+  equilibrium.py         stationarity, autocorrelation, agreement checks (+ _plots)
+  structure_plots.py     snapshot / yield histograms / grid, shared colour map
+  movie.py               trajectory GIF
   bond_graph.py          ADR-0002 bond-graph clusters, particle/cluster yields with
                          block errors, seed combination (API in module docstring)
   mu_scan.py             equilibration test, per-mu aggregation, mu* finder
@@ -102,17 +106,77 @@ sbatch simulation/runners/slurm/submit_yield.sh      # SLURM array
 
 ### Trajectory file (HDF5)
 
-Canonical runs write one `.h5` file per run (`base/trajectory.py`; the schema is
-in its module docstring). Root attributes hold model constants, design
-parameters, ensemble, seed, step counts, `dt`, thermostat, software version and
-`precision` (dtype of coordinates; energies are always float64). Groups
-`equilibration` and `production` hold per-frame `step`, `N`, `offset`,
-`potential_energy`, `kinetic_energy` and flat `positions` (sum N, 2) /
-`orientations` (sum N); frame i is rows `offset[i]:offset[i]+N[i]` (no padding,
-so variable-N frames work). Group `restart` holds the MD state and, when
-finished, phase `done`. Read with `open_trajectory(path).frames(phase, start,
-stop, step)`; legacy `.npz` / pickled `.npy` files open through the same call.
-Rerunning a canonical job resumes from the file without duplicating frames.
+Both ensembles write one `.h5` file per run with the same schema
+(`base/trajectory.py`).  Read it with `open_trajectory(path).frames(phase,
+start, stop, step)`; legacy `.npz` / pickled `.npy` files open through the same
+call.  Rerunning with `--resume` (canonical runners and `run_gcmc.py` resume by
+default) continues from the file without duplicating frames.
+
+Root attributes (a test checks this list against files from both ensembles):
+
+- Both ensembles: `schema_version`, `software_version`, `precision`, `ensemble`, `engine`, `thermostat`, `seed`, `box_size`, `kT`, `opening_angle`, `E_AA`, `E_BB`, `E_AB`, `bond_specificity`, `rep_A`, `alpha`, `patch_radius`, `morse_r_onset`, `morse_r_cutoff`, `center_radius`, `num_equilibration_steps`, `num_production_steps`, `sample_interval`, `equilibration_sample_interval`, `initial_condition`
+- Canonical only: `N`, `dt`
+- Grand canonical only: `mu`, `N_init`, `f_disp`, `md_steps`, `md_dt`, `gamma`, `acc_insertion`, `acc_deletion`, `acc_displacement`
+
+`precision` is the dtype of coordinates; energies are always float64.  In the
+canonical ensemble the step counts and `sample_interval` are MD steps, in the
+grand canonical ensemble sweeps.
+
+Groups `equilibration` and `production` hold per-frame datasets `step`, `N`,
+`offset`, `potential_energy`, `kinetic_energy`, and flat `positions` (sum N, 2)
+/ `orientations` (sum N), created with the first frame.  Frame i is rows
+`offset[i]:offset[i]+N[i]`: no padding, so grand-canonical frames with varying
+N work.  Group `restart` holds the engine state (canonical: MD state;
+grand canonical: MD state plus RNG state and acceptance counters as attributes)
+and, when finished, phase `done`.
+
+### Running either ensemble
+
+```bash
+python simulation/runners/run.py --ensemble canonical --opening_angle 1.5708 \
+    --E_AB 5.0 --box_area 100 --N 40 --n_equil 10000 --n_prod 100000 --output run.h5
+python simulation/runners/run.py --ensemble grand_canonical --opening_angle 1.5708 \
+    --E_AB 5.0 --mu -4.0 --n_equil 20000 --n_prod 10000 --output run.h5
+```
+
+Shared options: `--sample_interval`, `--equilibration_sample_interval` (0 = no
+equilibration frames), `--checkpoint_interval`, `--precision float32|float64`,
+`--seed`, `--kT`, `--E_AA`, `--E_BB`, `--rep_A`, `--resume`, `--quiet`, and
+`--initial_condition dispersed|preassembled` (random monomers, or complete rings
+of the size matching the opening angle: the forward/backward equilibrium check).
+`simulation/runners/run_gcmc.py` and `run_yield*.py` are wrappers around the
+same engines.
+
+### Analysis, equilibrium checks and plots
+
+Definitions follow `CONTEXT.md` and ADR-0002: a *bond* is an A-B patch pair
+closer than the bond distance (default the patch radius), a *cluster* is a
+connected component, a *ring* is a cluster in which every particle has both
+patches bonded, anything else with two or more particles is an *open chain*.
+*Particle yield* is the fraction of particles in a structure, *cluster yield*
+the fraction of clusters.  Both are averaged over production frames with
+block-averaged errors (seed-to-seed errors when combined across seeds).
+
+```bash
+# everything for one file: yields, equilibrium checks, plots, GIF
+python -m analysis.report run.h5 [--outdir D] [--seeds s2.h5 s3.h5] \
+    [--preassembled pre.h5] [--bond_distance d] [--no_gif]
+
+# individual pieces
+python -m analysis.structure_plots snapshot run.h5 --frame -1 --outdir D [--unwrap]
+python -m analysis.structure_plots histogram run.h5 --outdir D
+python -m analysis.structure_plots grid a.h5 b.h5 c.h5 --outdir D
+python -m analysis.movie run.h5 out.gif --stride 5 --fps 10 [--unwrap] [--no_clusters]
+```
+
+The report directory holds `job_<stem>_yields.npz` (read by
+`analysis.yields.load_yield_grid` for the phase diagram), `yields.json`,
+`equilibrium.json` (stationarity, autocorrelation time, seed agreement,
+forward/backward agreement, bond-distance sensitivity, each with pass/fail),
+and PNG/GIF figures; see `analysis/report.py`.  In Python:
+`analysis.bond_graph.yields`, `analysis.equilibrium.run_checks`,
+`analysis.structure_plots`, `analysis.equilibrium_plots`.  Plotting needs
+matplotlib; the GIF needs Pillow.  All run without a display.
 
 ### Patch-parameter design
 

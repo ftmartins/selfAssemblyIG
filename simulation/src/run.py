@@ -39,7 +39,8 @@ def _canonical(path, *, opening_angle, E_AB, box_area, N, n_equil, n_prod,
         equilibration_steps=n_equil,
         equilibration_sample_interval=equilibration_sample_interval,
         trajectory_path=path, resume=resume, precision=precision,
-        checkpoint_interval=checkpoint_interval, seed=seed)
+        checkpoint_interval=checkpoint_interval, seed=seed,
+        initial_condition=initial_condition)
 
 
 def _grand_canonical(path, *, opening_angle, E_AB, box_area, N_init, mu, n_equil,
