@@ -420,10 +420,11 @@ def run_gcmc(state, L, kT, mu, params, rng, n_equil, n_prod,
                     checkpoint(state, 'production', s + 1)
 
         acc_md, acc_ins, acc_del = _acceptance(counters)
-        if writer is not None and phase != 'done':
-            writer.set_attrs(acc_displacement=acc_md, acc_insertion=acc_ins,
-                             acc_deletion=acc_del)
-            checkpoint(state, 'done', n_prod)
+        if writer is not None:
+            if phase != 'done':
+                writer.set_attrs(acc_displacement=acc_md, acc_insertion=acc_ins,
+                                 acc_deletion=acc_del)
+                checkpoint(state, 'done', n_prod)
             N_list = [int(n) for n in writer._f['production']['N'][1:]]
             E_list = list(writer._f['production']['potential_energy'][1:])
     finally:

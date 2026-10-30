@@ -25,7 +25,10 @@ def _canonical(path, *, opening_angle, E_AB, box_area, N, n_equil, n_prod,
     from simulation.src.canonical_md import run_many_particle_md
 
     L = float(np.sqrt(box_area))
-    params = SimpleParams(kBT=kT, E_RR=E_AA, E_BB=E_BB, E_RB=E_AB, rep_A=rep_A)
+    # same model constants as generate_parameter_grid, so runs match the yield sweeps
+    params = SimpleParams(kBT=kT, E_RR=E_AA, E_BB=E_BB, E_RB=E_AB, morse_a=7.0,
+                          morse_r0=0.0, rep_A=rep_A, rep_alpha=2.5, morse_rcut=0.38,
+                          r_patch=1.0)
     params.alpha = float(opening_angle)
     if initial_condition == 'preassembled':
         positions, orientations = preassembled_rings(N, L, opening_angle, seed=seed)
@@ -100,7 +103,7 @@ def run_simulation(ensemble, path, *, opening_angle, E_AB, box_area, n_equil, n_
         if N is None:
             raise ValueError("canonical ensemble requires N")
         return _canonical(path, **common, N=int(N), dt=dt,
-                          rep_A=10.0 if rep_A is None else rep_A,
+                          rep_A=10_000.0 if rep_A is None else rep_A,
                           checkpoint_interval=checkpoint_interval or 200_000)
     if mu is None:
         raise ValueError("grand_canonical ensemble requires mu")

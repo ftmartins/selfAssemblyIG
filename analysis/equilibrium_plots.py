@@ -13,6 +13,8 @@ Figures for the equilibrium checks (:mod:`analysis.equilibrium`).
 
 Headless-safe like :mod:`analysis.structure_plots`; both return the ``Figure``.
 """
+from pathlib import Path
+
 import numpy as np
 from matplotlib.figure import Figure
 from matplotlib.patches import Patch
@@ -39,10 +41,15 @@ def timeseries_figure(source, out_dir=None, phase='production', min_yield=0.02,
     """Time-series figure with stationarity annotations.  ``report`` (an
     :class:`~analysis.equilibrium.EquilibriumReport`) supplies verdicts when
     given, otherwise they are computed here."""
+    owned = isinstance(source, (str, Path))
     reader = _open(source)
-    y = compute_yields(reader, phase=phase, **yield_kw)
-    energy = reader.series(phase, 'potential_energy')
-    n_series = reader.series(phase, 'N').astype(float)
+    try:
+        y = compute_yields(reader, phase=phase, **yield_kw)
+        energy = reader.series(phase, 'potential_energy')
+        n_series = reader.series(phase, 'N').astype(float)
+    finally:
+        if owned:
+            reader.close()
     n_series = n_series[n_series > 0]
     bonded = 1.0 - y.particle_series['monomer'] if 'monomer' in y.particle_series \
         else np.ones(y.n_frames)
@@ -59,9 +66,10 @@ def timeseries_figure(source, out_dir=None, phase='production', min_yield=0.02,
     for ax, (name, ser, col, key) in zip(axes, panels):
         ax.plot(ser, color=col, lw=0.8)
         ax.set_ylabel(name, fontsize=8)
-        res = report.checks[key] if report is not None and key in report.checks \
-            else eq.stationarity(ser, name=key)
-        _annotate(ax, res)
+        if report is not None and key in report.checks:
+            _annotate(ax, report.checks[key])
+        elif len(ser) >= eq.MIN_STATIONARITY_POINTS:
+            _annotate(ax, eq.stationarity(ser, name=key))
     ax = axes[-1]
     for k in labels:
         ax.plot(y.cluster_series[k], color=structure_color(k), lw=1.0, label=k)
@@ -69,7 +77,8 @@ def timeseries_figure(source, out_dir=None, phase='production', min_yield=0.02,
     ax.set_xlabel('frame')
     if labels:
         ax.legend(fontsize=7, ncol=min(len(labels), 4), loc='upper right')
-        verdicts = [eq.stationarity(y.cluster_series[k], name=k) for k in labels]
+        verdicts = [eq.stationarity(y.cluster_series[k], name=k) for k in labels
+                    if len(y.cluster_series[k]) >= eq.MIN_STATIONARITY_POINTS]
         bad = [r.name for r in verdicts if not r.passed]
         ax.text(0.01, 0.97, 'cluster yields stationary' if not bad
                 else 'drifting: ' + ', '.join(bad), transform=ax.transAxes, ha='left',

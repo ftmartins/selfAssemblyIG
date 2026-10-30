@@ -46,7 +46,7 @@ analysis/
                          block errors, seed combination (API in module docstring)
   mu_scan.py             equilibration test, per-mu aggregation, mu* finder
   yields.py              (opening angle, selectivity) yield-grid assembly
-  gcmc_runs.py           discover / parse / load run.npz directories
+  gcmc_runs.py           discover / parse / load run.h5 (or legacy run.npz) directories
   plotting.py            all matplotlib figure functions
   aggregate_mu_scan.py   CLI wrapper
   notebooks/             one notebook per analysis theme

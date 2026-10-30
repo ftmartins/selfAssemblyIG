@@ -36,6 +36,9 @@ from base.config import PATCH_RADIUS
 from base.trajectory import open_trajectory
 
 
+MIN_STATIONARITY_POINTS = 8
+
+
 @dataclass
 class CheckResult:
     name: str
@@ -112,8 +115,9 @@ def _block_stats(x, n_blocks):
 def stationarity(series, n_blocks=10, z_crit=3.0, name='stationarity'):
     """Stationarity of one series (see module docstring)."""
     x = np.asarray(series, float)
-    if len(x) < 8:
-        raise ValueError('need at least 8 points for a stationarity check')
+    if len(x) < MIN_STATIONARITY_POINTS:
+        raise ValueError(f'need at least {MIN_STATIONARITY_POINTS} points for a '
+                         'stationarity check')
     h = len(x) // 2
     first, second = x[:h], x[h:]
     nb_half = max(2, n_blocks // 2)
@@ -177,9 +181,14 @@ def bond_distance_sensitivity(source, factors=(0.9, 1.0, 1.1), tol=0.05,
                               **yield_kw):
     """Yields at bond distances ``factor * center`` (default the patch radius); passes if no
     structure's particle yield moves by more than ``tol`` across ``factors``."""
-    reader = open_trajectory(source) if isinstance(source, (str, Path)) else source
-    ys = [compute_yields(reader, bond_distance=f * center, **yield_kw)
-          for f in factors]
+    owned = isinstance(source, (str, Path))
+    reader = open_trajectory(source) if owned else source
+    try:
+        ys = [compute_yields(reader, bond_distance=f * center, **yield_kw)
+              for f in factors]
+    finally:
+        if owned:
+            reader.close()
     labels = sorted({k for y in ys for k in y.particle_yield})
     spread = {k: float(np.ptp([y.particle_yield.get(k, 0.0) for y in ys]))
               for k in labels}
@@ -204,9 +213,10 @@ def run_checks(trajectory_path, other_seeds=(), preassembled=None, save=True,
         main = compute_yields(r, **yield_kw)
         energy = r.series('production', 'potential_energy')
         report.meta['n_frames'] = main.n_frames
-        report.add(stationarity(energy, name='stationarity:potential_energy'))
+        if len(energy) >= MIN_STATIONARITY_POINTS:     # shorter runs: no verdict
+            report.add(stationarity(energy, name='stationarity:potential_energy'))
         for k, ser in main.particle_series.items():
-            if main.particle_yield[k] >= min_yield:
+            if main.particle_yield[k] >= min_yield and len(ser) >= MIN_STATIONARITY_POINTS:
                 report.add(stationarity(ser, name=f'stationarity:{k}'))
         tau = integrated_autocorrelation_time(energy)
         report.add(CheckResult('autocorrelation', True, dict(

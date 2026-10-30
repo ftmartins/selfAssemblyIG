@@ -143,7 +143,7 @@ def draw_frame(ax, positions, orientations, box_size, opening_angle, structures=
         for pts, col in ((pa_pts, PATCH_A_COLOR), (pb_pts, PATCH_B_COLOR)):
             pts = np.array(pts)
             ax.scatter(pts[:, 0], pts[:, 1], s=14, c=col, zorder=3, linewidths=0)
-    if unwrap:
+    if unwrap and len(pos):
         lo, hi = pos.min(axis=0) - 2, pos.max(axis=0) + 2
         ax.set_xlim(min(lo[0], 0), max(hi[0], L))
         ax.set_ylim(min(lo[1], 0), max(hi[1], L))
@@ -171,13 +171,18 @@ def structure_legend_handles(labels):
 def snapshot(source, frame=-1, phase='production', out_dir=None, bond_distance=None,
              figsize=(6.4, 5.6), unwrap=False):
     """Snapshot of one frame, particles coloured by the size of their cluster."""
+    owned = isinstance(source, (str, Path))
     reader = _open(source)
-    n = reader.n_frames(phase)
-    idx = frame if frame >= 0 else n + frame
-    if not 0 <= idx < n:
-        raise IndexError(f'frame {frame} out of range for {n} {phase} frames')
-    fr = reader.frames(phase, idx, idx + 1)[0]
-    L, theta = float(reader.attrs['box_size']), float(reader.attrs['opening_angle'])
+    try:
+        n = reader.n_frames(phase)
+        idx = frame if frame >= 0 else n + frame
+        if not 0 <= idx < n:
+            raise IndexError(f'frame {frame} out of range for {n} {phase} frames')
+        fr = reader.frames(phase, idx, idx + 1)[0]
+        L, theta = float(reader.attrs['box_size']), float(reader.attrs['opening_angle'])
+    finally:
+        if owned:
+            reader.close()
     s = classify_frame(fr.positions, fr.orientations, L, theta, bond_distance)
     fig = Figure(figsize=figsize)
     ax = fig.add_axes([0.02, 0.02, 0.72, 0.94])

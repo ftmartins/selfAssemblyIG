@@ -2,7 +2,7 @@
 Discover and load full GCMC runs produced by ``simulation/runners/run_gcmc.py``.
 
 Run directories are named
-``oa<deg>deg_EAB<E_AB>_mu<mu>_kT<kT>_r<realization>`` and contain ``run.npz``.
+``oa<deg>deg_EAB<E_AB>_mu<mu>_kT<kT>_r<realization>`` and contain ``run.h5`` (current HDF5 store) or the legacy ``run.npz``.
 """
 
 import re
@@ -11,6 +11,7 @@ from pathlib import Path
 import numpy as np
 
 from base.paths import GCMC_RUNS_DIR
+from base.trajectory import open_trajectory
 
 _DIR_RE = re.compile(
     r'oa(?P<oa_deg>[-\d.]+)deg_EAB(?P<E_AB>[-\d.]+)_mu(?P<mu>[-\d.]+)'
@@ -40,15 +41,37 @@ def discover_runs(root=None):
     out = []
     for d in sorted(root.glob('oa*deg_EAB*')):
         meta = parse_run_dirname(d.name)
-        npz = d / 'run.npz'
-        if meta is not None and npz.exists():
-            out.append((meta, npz))
+        run = next((d / n for n in ('run.h5', 'run.npz') if (d / n).exists()), None)
+        if meta is not None and run is not None:
+            out.append((meta, run))
     return out
 
 
+def _load_run_h5(path):
+    """HDF5 run -> dict with ``frames`` (list of ``(N_i, 3)`` [x, y, theta] arrays),
+    ``N_traj`` / ``E_traj`` (production frames after the initial one) and ``attrs``."""
+    with open_trajectory(path) as r:
+        frames = r.frames('production')
+        attrs = dict(r.attrs)
+    return {
+        'frames': [np.column_stack([f.positions, f.orientations]) for f in frames],
+        'N_traj': np.array([f.N for f in frames[1:]], np.int32),
+        'E_traj': np.array([f.potential_energy for f in frames[1:]], np.float32),
+        'attrs': attrs,
+    }
+
+
+def _N_traj(path):
+    if str(path).endswith(('.h5', '.hdf5')):
+        return _load_run_h5(path)['N_traj']
+    return np.load(path)['N_traj']
+
+
 def load_run(path):
-    """Load one ``run.npz`` into a plain dict; unpacks the NaN-padded
-    ``snapshot_q`` into a list of ``(N_i, 3)`` arrays under ``'frames'``."""
+    """Load one ``run.h5`` / ``run.npz`` into a plain dict; for ``.npz`` unpacks the
+    NaN-padded ``snapshot_q`` into a list of ``(N_i, 3)`` arrays under ``'frames'``."""
+    if str(path).endswith(('.h5', '.hdf5')):
+        return _load_run_h5(path)
     data = np.load(path, allow_pickle=True)
     out = {k: data[k] for k in data.files}
     if 'snapshot_q' in out and 'snapshot_N' in out:
@@ -64,7 +87,7 @@ def stack_N_trajectories(runs=None):
     metas, rows = [], []
     length = None
     for meta, npz in runs:
-        N = np.load(npz)['N_traj']
+        N = _N_traj(npz)
         if length is None:
             length = len(N)
         if len(N) == length:

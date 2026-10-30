@@ -123,8 +123,9 @@ def classify_frame(positions, orientations, box_size, opening_angle,
     ncomp, comp = connected_components(adj, directed=False)
     both = a_bonded & b_bonded
     clusters = []
-    for k in range(ncomp):
-        members = np.flatnonzero(comp == k)
+    order = np.argsort(comp, kind='stable')          # members of each component, grouped
+    bounds = np.cumsum(np.bincount(comp, minlength=ncomp))[:-1]
+    for members in np.split(order, bounds):
         size = len(members)
         if size == 1:
             kind = 'monomer'
@@ -174,14 +175,19 @@ def _summarise(series, n_blocks):
 def yields(source, phase='production', start=None, stop=None, step=None,
            bond_distance=None, n_blocks=10, opening_angle=None, box_size=None):
     """Particle and cluster yields (with block-averaged errors) of a trajectory."""
-    reader = open_trajectory(source) if isinstance(source, (str, bytes)) or hasattr(
-        source, '__fspath__') else source
-    attrs = dict(reader.attrs)
+    owned = isinstance(source, (str, bytes)) or hasattr(source, '__fspath__')
+    reader = open_trajectory(source) if owned else source
+    try:
+        attrs = dict(reader.attrs)
+        frames = reader.frames(phase, start, stop, step)
+    finally:
+        if owned:
+            reader.close()
     theta = float(attrs['opening_angle'] if opening_angle is None else opening_angle)
     L = float(attrs['box_size'] if box_size is None else box_size)
     bd = PATCH_RADIUS if bond_distance is None else float(bond_distance)
     per_frame = []
-    for fr in reader.frames(phase, start, stop, step):
+    for fr in frames:
         if fr.N == 0:
             continue
         s = classify_frame(fr.positions, fr.orientations, L, theta, bd)

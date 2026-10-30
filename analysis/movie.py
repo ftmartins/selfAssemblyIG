@@ -17,6 +17,7 @@ Command line::
         [--fps 10] [--figsize 5] [--no_clusters] [--unwrap] [--phase production]
 """
 import argparse
+from pathlib import Path
 
 import numpy as np
 from matplotlib.backends.backend_agg import FigureCanvasAgg
@@ -39,9 +40,14 @@ def make_gif(source, out_path, start=0, stop=None, stride=1, fps=10, figsize=5.0
              bond_distance=None, dpi=80):
     """Write a GIF of the trajectory; returns the number of GIF frames."""
     Image = _pillow()
+    owned = isinstance(source, (str, Path))
     reader = _open(source)
-    L, theta = float(reader.attrs['box_size']), float(reader.attrs['opening_angle'])
-    frames = reader.frames(phase, start, stop, stride)
+    try:
+        L, theta = float(reader.attrs['box_size']), float(reader.attrs['opening_angle'])
+        frames = reader.frames(phase, start, stop, stride)
+    finally:
+        if owned:
+            reader.close()
     if not frames:
         raise ValueError(f'no {phase} frames in range({start}, {stop}, {stride})')
     images = []
