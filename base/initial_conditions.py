@@ -102,3 +102,66 @@ def random_uniform_ic(n: int, box_size: float, *, seed: int = None,
     positions = rng.uniform(lo, hi, size=(n, 2))
     orientations = rng.uniform(0.0, 2.0 * np.pi, size=n)
     return positions, orientations
+
+
+def ring_size_for_angle(opening_angle: float) -> int:
+    """Size of the regular ring whose interior angle is closest to
+    ``opening_angle`` (``theta = pi (n - 2) / n``), at least 3."""
+    return max(3, int(round(2.0 * np.pi / (np.pi - opening_angle))))
+
+
+def preassembled_rings(n: int, box_size: float, opening_angle: float, *,
+                       seed: int = None, rng: np.random.Generator = None,
+                       centered: bool = False, max_attempts: int = 20_000):
+    """
+    Pre-assembled start: as many complete regular rings of size
+    :func:`ring_size_for_angle` as fit in ``n`` particles (centre spacing 2, every
+    A-B patch pair touching), the remainder as monomers; rings and monomers are
+    placed without overlap by RSA on their bounding discs, with random rigid
+    rotations.
+
+    Returns ``(positions, orientations)`` like :func:`rsa_2d`.
+    """
+    if rng is None:
+        rng = np.random.default_rng(seed)
+    k = ring_size_for_angle(opening_angle)
+    n_rings, n_mono = divmod(n, k)
+    R = 1.0 / np.sin(np.pi / k)                     # circumradius for side 2
+    phi = -2.0 * np.pi * np.arange(k) / k
+    local = R * np.stack([np.cos(phi), np.sin(phi)], axis=1)
+    bond_dir = np.arctan2(*(np.roll(local, -1, axis=0) - local).T[::-1])
+    local_ori = np.roll(bond_dir, 1) + np.pi        # A patch points back along the bond
+    margin = CENTER_RADIUS + PATCH_SIZE
+    radii = [R + margin] * n_rings + [margin] * n_mono
+
+    lo = -box_size / 2 if centered else 0.0
+    centres = np.empty((len(radii), 2))
+    for i, r in enumerate(radii):
+        for _ in range(max_attempts):
+            cand = rng.uniform(lo, lo + box_size, size=2)
+            if i == 0:
+                break
+            dr = _minimum_image(cand[None, :] - centres[:i], box_size)
+            if np.all(np.hypot(*dr.T) >= r + np.array(radii[:i])):
+                break
+        else:
+            raise RuntimeError(f"could not place object {i + 1}/{len(radii)}: "
+                               f"box too small for a pre-assembled start")
+        centres[i] = cand
+
+    pos, ori = [], []
+    for i in range(n_rings):
+        a = rng.uniform(0.0, 2.0 * np.pi)
+        rot = np.array([[np.cos(a), -np.sin(a)], [np.sin(a), np.cos(a)]])
+        pos.append(centres[i] + local @ rot.T)
+        ori.append(local_ori + a)
+    for j in range(n_mono):
+        pos.append(centres[n_rings + j][None, :])
+        ori.append(rng.uniform(0.0, 2.0 * np.pi, size=1))
+    pos = np.concatenate(pos)
+    ori = np.mod(np.concatenate(ori), 2.0 * np.pi)
+    if not centered:
+        pos = np.mod(pos, box_size)
+    else:
+        pos = _minimum_image(pos, box_size)
+    return pos, ori

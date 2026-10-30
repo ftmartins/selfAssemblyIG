@@ -45,6 +45,8 @@ def parse_args(argv=None):
     p.add_argument('--equilibration_sample_interval', type=int, default=0)
     p.add_argument('--checkpoint_interval', type=int, default=None)
     p.add_argument('--precision', choices=['float32', 'float64'], default='float32')
+    p.add_argument('--initial_condition', choices=['dispersed', 'preassembled'],
+                   default='dispersed', help='RSA monomers or pre-assembled rings')
     p.add_argument('--resume', action='store_true')
     p.add_argument('--quiet', action='store_true')
     c = p.add_argument_group('canonical')
@@ -76,7 +78,8 @@ def main(argv=None):
         checkpoint_interval=a.checkpoint_interval, mu=a.mu, N_init=a.N_init,
         md_steps=a.md_steps, md_dt=a.md_dt, gamma=a.gamma, f_disp=a.f_disp,
         equilibration_sample_interval=a.equilibration_sample_interval,
-        precision=a.precision, resume=a.resume, verbose=not a.quiet)
+        precision=a.precision, resume=a.resume, verbose=not a.quiet,
+        initial_condition=a.initial_condition)
     print(f'Saved: {a.output}')
 
 

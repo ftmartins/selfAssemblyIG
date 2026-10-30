@@ -17,16 +17,22 @@ ENSEMBLES = ('canonical', 'grand_canonical')
 
 def _canonical(path, *, opening_angle, E_AB, box_area, N, n_equil, n_prod,
                sample_interval, seed, kT, E_AA, E_BB, rep_A, dt,
-               checkpoint_interval, equilibration_sample_interval, precision, resume):
+               checkpoint_interval, equilibration_sample_interval, precision, resume,
+               initial_condition):
     import jax
-    from base.initial_conditions import rsa_2d
+    from base.initial_conditions import preassembled_rings, rsa_2d
     from base.params import SimpleParams
     from simulation.src.canonical_md import run_many_particle_md
 
     L = float(np.sqrt(box_area))
     params = SimpleParams(kBT=kT, E_RR=E_AA, E_BB=E_BB, E_RB=E_AB, rep_A=rep_A)
     params.alpha = float(opening_angle)
-    positions, orientations = rsa_2d(N, L, seed=seed, centered=False)
+    if initial_condition == 'preassembled':
+        positions, orientations = preassembled_rings(N, L, opening_angle, seed=seed)
+    elif initial_condition == 'dispersed':
+        positions, orientations = rsa_2d(N, L, seed=seed, centered=False)
+    else:
+        raise ValueError("initial_condition must be 'dispersed' or 'preassembled'")
     return run_many_particle_md(
         N, L, params, n_prod, kT, jax.random.PRNGKey(seed), dt,
         positions, orientations, sample_interval=sample_interval,
@@ -39,7 +45,7 @@ def _canonical(path, *, opening_angle, E_AB, box_area, N, n_equil, n_prod,
 def _grand_canonical(path, *, opening_angle, E_AB, box_area, N_init, mu, n_equil,
                      n_prod, sample_interval, seed, kT, E_AA, E_BB, rep_A,
                      md_steps, md_dt, gamma, f_disp, checkpoint_interval,
-                     equilibration_sample_interval, precision, resume, verbose):
+                     equilibration_sample_interval, precision, resume, verbose, initial_condition):
     from simulation.src.gcmc import generate_ic, make_gcmc_params, run_gcmc
 
     L = float(np.sqrt(box_area))
@@ -54,9 +60,11 @@ def _grand_canonical(path, *, opening_angle, E_AB, box_area, N_init, mu, n_equil
         md_steps=int(md_steps), md_dt=float(md_dt), gamma=float(gamma),
         num_equilibration_steps=int(n_equil), num_production_steps=int(n_prod),
         sample_interval=int(sample_interval),
-        equilibration_sample_interval=int(equilibration_sample_interval))
+        equilibration_sample_interval=int(equilibration_sample_interval),
+        initial_condition=initial_condition)
     rng = np.random.default_rng(seed)
-    state = generate_ic(int(N_init), L, params, kT=kT, seed=seed)
+    state = generate_ic(int(N_init), L, params, kT=kT, seed=seed,
+                        initial_condition=initial_condition)
     return run_gcmc(
         state, L, kT, mu, params, rng, n_equil=n_equil, n_prod=n_prod, f_disp=f_disp,
         MD_STEPS=md_steps, MD_DT=md_dt, GAMMA=gamma, snapshot_interval=sample_interval,
@@ -70,11 +78,13 @@ def run_simulation(ensemble, path, *, opening_angle, E_AB, box_area, n_equil, n_
                    N=None, dt=1e-3, checkpoint_interval=None,
                    mu=None, N_init=16, md_steps=5000, md_dt=1e-2, gamma=1.0, f_disp=0.5,
                    equilibration_sample_interval=0, precision='float64', resume=False,
-                   verbose=False):
+                   verbose=False, initial_condition='dispersed'):
     """Run one simulation of the given ensemble into the HDF5 file ``path``.
 
     Canonical needs ``N`` (and ``dt``); grand canonical needs ``mu`` (and
-    ``N_init``, ``md_steps``, ``md_dt``, ``gamma``, ``f_disp``).  ``rep_A``
+    ``N_init``, ``md_steps``, ``md_dt``, ``gamma``, ``f_disp``).
+    ``initial_condition`` is ``'dispersed'`` (RSA monomers) or ``'preassembled'``
+    (complete rings of the size matching ``opening_angle``).  ``rep_A``
     defaults to each engine's own value.  Returns the engine's result (final MD
     state for canonical, result dict for grand canonical).
     """
@@ -84,7 +94,7 @@ def run_simulation(ensemble, path, *, opening_angle, E_AB, box_area, n_equil, n_
                   n_equil=n_equil, n_prod=n_prod, sample_interval=sample_interval,
                   seed=seed, kT=kT, E_AA=E_AA, E_BB=E_BB,
                   equilibration_sample_interval=equilibration_sample_interval,
-                  precision=precision, resume=resume)
+                  precision=precision, resume=resume, initial_condition=initial_condition)
     if ensemble == 'canonical':
         if N is None:
             raise ValueError("canonical ensemble requires N")

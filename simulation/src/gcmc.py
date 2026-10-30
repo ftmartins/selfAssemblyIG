@@ -33,7 +33,7 @@ from base.energy import (
     total_energy_pbc,
     total_energy_jax as _total_energy_jax,
 )
-from base.initial_conditions import rsa_2d
+from base.initial_conditions import preassembled_rings, rsa_2d
 
 __all__ = [
     "MCMCState", "make_gcmc_params", "GcmcDefaults",
@@ -280,12 +280,21 @@ def mc_sweep(state, L, kT, mu, params, rng,
 
 # ── Initial condition ────────────────────────────────────────────────────
 
-def generate_ic(N, L, params, kT=1.0, seed=42, max_att=20_000) -> MCMCState:
-    """RSA of ``N`` non-overlapping particles in a centred box, with
-    Maxwell-Boltzmann velocities at temperature ``kT``."""
+def generate_ic(N, L, params, kT=1.0, seed=42, max_att=20_000,
+                initial_condition='dispersed') -> MCMCState:
+    """Initial state of ``N`` particles in a centred box with Maxwell-Boltzmann
+    velocities at temperature ``kT``: ``'dispersed'`` is RSA of non-overlapping
+    particles, ``'preassembled'`` is complete rings (plus monomers for the
+    remainder) matching the opening angle."""
     rng = np.random.default_rng(seed)
-    pos, ori = rsa_2d(N, L, min_distance=2.0 * params['r_patch'],
-                      rng=rng, centered=True, max_attempts=max_att)
+    if initial_condition == 'preassembled':
+        pos, ori = preassembled_rings(N, L, params['opening_angle'], rng=rng,
+                                      centered=True, max_attempts=max_att)
+    elif initial_condition == 'dispersed':
+        pos, ori = rsa_2d(N, L, min_distance=2.0 * params['r_patch'],
+                          rng=rng, centered=True, max_attempts=max_att)
+    else:
+        raise ValueError("initial_condition must be 'dispersed' or 'preassembled'")
     q = np.column_stack([pos, ori]).astype(np.float64)
     v = rng.normal(0.0, np.sqrt(kT), size=q.shape)
     return MCMCState(q=q, v=v)
