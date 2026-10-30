@@ -308,7 +308,7 @@ Suggested layout: 2×3 grid of subplots (one per n-ring).
   > `alpha`, `patch`, or `orient` to catch any remaining uses. The reference implementation is
   > `thetas_to_shape` in `modules/utility_functions.py` (lines 79–88).
 - **Morse potential parameters** from `config_patchy_particle.py`:
-  `ALPHA = 7`, `PATCH_SIZE = log(1 - sqrt(0.99)) / (-7) / 2`, `R_CUTOFF = PATCH_SIZE`.
+  `ALPHA = 7`, `PATCH_SIZE = log(1 - sqrt(0.99)) / (-7) / 2`, `PATCH_RADIUS = PATCH_SIZE`.
 - **Soft-sphere repulsion** acts only between centers (species 0–0 in JAX-MD), with
   `sigma = 2 * CENTER_RADIUS = 2.0` and `rep_A = 10.0` (default in `SimpleParams`).
 - **Parameter grid alignment**: Sections 2 and 3 must use the same `(opening_angle, E_AB)`

@@ -31,6 +31,8 @@ def load_yield_grid(input_dir=None, alphas_deg=None, zetas=None):
         d = np.load(f)
         a = float(d['alpha_deg'])
         z = float(d['selectivity'])
+        if not (np.isfinite(a) and np.isfinite(z)):
+            continue                    # argmin over NaN would silently pick index 0
         ai = int(np.argmin(np.abs(alphas_deg - a)))
         zi = int(np.argmin(np.abs(zetas - z)))
         for s in STRUCTURES:

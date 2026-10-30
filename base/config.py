@@ -22,8 +22,15 @@ PATCH_MASS = 0.0
 # ── Interaction parameters ───────────────────────────────────────────────────
 ALPHA = 7.0                       # Morse potential decay parameter
 DT = 1e-3                         # default MD time step
-PATCH_SIZE = float(np.log(1.0 - np.sqrt(0.99)) / (-ALPHA) / 2.0)
-R_CUTOFF = PATCH_SIZE             # Morse cutoff radius
+# Patch radius a: half the patch-patch distance at which the Morse attraction
+# falls to 1% of its depth (CONTEXT.md).  Also the bond distance (ADR-0002).
+PATCH_RADIUS = float(np.log(1.0 - np.sqrt(0.99)) / (-ALPHA) / 2.0)
+PATCH_SIZE = PATCH_RADIUS         # legacy alias of PATCH_RADIUS
+
+# Morse bond range (ADR-0001): full Morse below the onset, C1 window to zero at
+# the cutoff, nothing beyond.  Both are passed explicitly to every engine.
+MORSE_R_ONSET = 1.5
+MORSE_R_CUTOFF = 2.0
 
 # ── Thermodynamics ──────────────────────────────────────────────────────────
 kT = 1.0

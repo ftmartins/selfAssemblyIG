@@ -133,7 +133,7 @@ SHAPE_CONFIGS = {
     },
     'triangle': {
         'n_vertices': 3,
-        'default_opening_angle': 120.0,
+        'default_opening_angle': 60.0,    # matching angle pi(n-2)/n for n=3
         'description': '2-patch triangle assembly',
     },
 }
