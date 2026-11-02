@@ -338,7 +338,8 @@ def run_gcmc(state, L, kT, mu, params, rng, n_equil, n_prod,
     Returns a dict with ``N_traj`` / ``E_traj`` (production frames after
     sweep 0), ``acc_md/ins/del``, ``final_state``, ``q_final`` (and
     ``md_E_traj`` / ``md_q_traj`` when ``dump_md_energies``; these are not
-    resumable).
+    resumable, and the energies are also stored in the file as
+    ``md_segments/energy``).
     """
     from base.trajectory import TrajectoryWriter
     ckpt_interval = checkpoint_interval or snapshot_interval
@@ -425,6 +426,9 @@ def run_gcmc(state, L, kT, mu, params, rng, n_equil, n_prod,
                 writer.set_attrs(acc_displacement=acc_md, acc_insertion=acc_ins,
                                  acc_deletion=acc_del)
                 checkpoint(state, 'done', n_prod)
+            if dump_md_energies:
+                writer.write_array('md_segments/energy', np.array(md_E_list, np.float32).reshape(
+                    -1, md_energy_chunks))
             N_list = [int(n) for n in writer._f['production']['N'][1:]]
             E_list = list(writer._f['production']['potential_energy'][1:])
     finally:

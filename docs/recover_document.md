@@ -78,8 +78,9 @@ V_morse(r, eps) = eps * (1 - exp(-alpha_morse * r))^2 - eps   if r < r_cutoff
 ```
 where `r_cutoff = patch_sigma` and the Morse equilibrium is at `r0 = 0` (sigma=0 in JAX-MD).
 
-Note: the actual JAX-MD call in the cluster script uses `sigma=0.0` for Morse and a truncation
-at `r_cutoff = PATCH_SIZE`. Replicate this truncation.
+> **Superseded (ADR-0001):** this describes the original recovered script. The model now uses
+> the full Morse out to `r_onset = 1.5`, a smooth window to zero at `r_cutoff = 2.0`, and nothing
+> beyond (`base/config.py`, `MORSE_R_ONSET` / `MORSE_R_CUTOFF`). Do not replicate the old truncation.
 
 **Total energy:**
 ```
@@ -456,6 +457,11 @@ active particles) rather than recomputing the full N²/2 sum. This makes inserti
 O(N) instead of O(N²).
 
 ### Outputs
+
+> **Superseded:** current runs write one HDF5 trajectory per run (`run.h5`; schema in the README
+> and `base/trajectory.py`), with N, potential energy and acceptance rates stored in the file and
+> yields computed afterwards by `python -m analysis.report`. The original `.npz` layout is kept
+> below as the historical specification.
 
 For each `(opening_angle, mu)` grid point, save one `.npz` file
 `gcmc_alpha{alpha_deg:.1f}_mu{mu:.2f}.npz`:

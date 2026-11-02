@@ -53,6 +53,10 @@ def parse_args():
     p.add_argument('--realization', type=int, default=0)
     p.add_argument('--no_checkpoint', action='store_true',
                    help='start afresh instead of resuming an existing output file')
+    p.add_argument('--dump_md_energies', action='store_true',
+                   help='store energy along each MD move (md_segments/energy in the .h5) '
+                        'and the MD trajectories in <run_dir>/md_trajectories.npy')
+    p.add_argument('--md_energy_chunks', type=int, default=5000)
     p.add_argument('--quiet', action='store_true')
     return p.parse_args()
 
@@ -77,12 +81,18 @@ def main():
         kT=args.kT, E_AA=args.E_AA, E_BB=args.E_BB, rep_A=args.rep_A, mu=args.mu,
         N_init=int(args.N_init), md_steps=args.md_steps, md_dt=args.md_dt,
         gamma=args.gamma, f_disp=args.f_disp, resume=not args.no_checkpoint,
-        verbose=not args.quiet)
+        verbose=not args.quiet, dump_md_energies=args.dump_md_energies,
+        md_energy_chunks=args.md_energy_chunks)
 
     N_traj = results['N_traj']
     print(f'  <N>_prod = {np.mean(N_traj):.2f} +/- {np.std(N_traj):.2f}')
     print(f'  acc_md={results["acc_md"]:.4f}  acc_ins={results["acc_ins"]:.4f}  '
           f'acc_del={results["acc_del"]:.4f}')
+    if args.dump_md_energies and results.get('md_q_traj'):
+        md_path = os.path.join(run_dir, 'md_trajectories.npy')
+        np.save(md_path, {'MD_trajectories': dict(enumerate(results['md_q_traj']))},
+                allow_pickle=True)
+        print(f'  MD trajectories: {md_path}')
 
 
 if __name__ == '__main__':

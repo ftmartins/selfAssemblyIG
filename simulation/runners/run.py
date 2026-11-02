@@ -59,6 +59,9 @@ def parse_args(argv=None):
     g.add_argument('--md_dt', type=float, default=GC.md_dt)
     g.add_argument('--gamma', type=float, default=GC.gamma)
     g.add_argument('--f_disp', type=float, default=GC.f_disp)
+    g.add_argument('--dump_md_energies', action='store_true',
+                   help='store energy along each MD move (md_segments/energy)')
+    g.add_argument('--md_energy_chunks', type=int, default=10)
     return p.parse_args(argv)
 
 
@@ -79,7 +82,8 @@ def main(argv=None):
         md_steps=a.md_steps, md_dt=a.md_dt, gamma=a.gamma, f_disp=a.f_disp,
         equilibration_sample_interval=a.equilibration_sample_interval,
         precision=a.precision, resume=a.resume, verbose=not a.quiet,
-        initial_condition=a.initial_condition)
+        initial_condition=a.initial_condition, dump_md_energies=a.dump_md_energies,
+        md_energy_chunks=a.md_energy_chunks)
     print(f'Saved: {a.output}')
 
 

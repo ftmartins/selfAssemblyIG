@@ -174,3 +174,22 @@ def test_gcmc_runner_wrapper(tmp_path, monkeypatch):
     run_gcmc.main()
     with open_trajectory(out) as r:
         assert r.attrs['ensemble'] == 'grand_canonical'
+
+
+def test_md_segment_energies_stored_when_requested(tmp_path):
+    p = tmp_path / 'md.h5'
+    run_simulation('grand_canonical', p, **{**GC, 'mu': 0.0}, dump_md_energies=True,
+                   md_energy_chunks=4)
+    with open_trajectory(p) as r:
+        e = r.read_array('md_segments/energy')
+        assert e.ndim == 2 and e.shape[1] == 4 and e.shape[0] > 0
+        assert np.all(np.isfinite(e))
+        assert r.read_array('nope') is None
+    with open_trajectory(gc_plain(tmp_path)) as r:
+        assert r.read_array('md_segments/energy') is None
+
+
+def gc_plain(tmp_path):
+    p = tmp_path / 'plain.h5'
+    run_simulation('grand_canonical', p, **GC)
+    return p

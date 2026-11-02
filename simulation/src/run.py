@@ -49,7 +49,8 @@ def _canonical(path, *, opening_angle, E_AB, box_area, N, n_equil, n_prod,
 def _grand_canonical(path, *, opening_angle, E_AB, box_area, N_init, mu, n_equil,
                      n_prod, sample_interval, seed, kT, E_AA, E_BB, rep_A,
                      md_steps, md_dt, gamma, f_disp, checkpoint_interval,
-                     equilibration_sample_interval, precision, resume, verbose, initial_condition):
+                     equilibration_sample_interval, precision, resume, verbose, initial_condition, dump_md_energies,
+                     md_energy_chunks):
     from simulation.src.gcmc import generate_ic, make_gcmc_params, run_gcmc
 
     L = float(np.sqrt(box_area))
@@ -74,7 +75,8 @@ def _grand_canonical(path, *, opening_angle, E_AB, box_area, N_init, mu, n_equil
         MD_STEPS=md_steps, MD_DT=md_dt, GAMMA=gamma, snapshot_interval=sample_interval,
         verbose=verbose, trajectory_path=path, attrs=attrs, resume=resume,
         precision=precision, equilibration_sample_interval=equilibration_sample_interval,
-        checkpoint_interval=checkpoint_interval)
+        checkpoint_interval=checkpoint_interval, dump_md_energies=dump_md_energies,
+        md_energy_chunks=md_energy_chunks)
 
 
 def run_simulation(ensemble, path, *, opening_angle, E_AB, box_area, n_equil, n_prod,
@@ -82,13 +84,17 @@ def run_simulation(ensemble, path, *, opening_angle, E_AB, box_area, n_equil, n_
                    N=None, dt=1e-3, checkpoint_interval=None,
                    mu=None, N_init=16, md_steps=5000, md_dt=1e-2, gamma=1.0, f_disp=0.5,
                    equilibration_sample_interval=0, precision='float64', resume=False,
-                   verbose=False, initial_condition='dispersed'):
+                   verbose=False, initial_condition='dispersed', dump_md_energies=False,
+                   md_energy_chunks=10):
     """Run one simulation of the given ensemble into the HDF5 file ``path``.
 
     Canonical needs ``N`` (and ``dt``); grand canonical needs ``mu`` (and
     ``N_init``, ``md_steps``, ``md_dt``, ``gamma``, ``f_disp``).
     ``initial_condition`` is ``'dispersed'`` (RSA monomers) or ``'preassembled'``
-    (complete rings of the size matching ``opening_angle``).  ``rep_A``
+    (complete rings of the size matching ``opening_angle``).  Grand canonical
+    only: ``dump_md_energies`` stores the energy along every MD displacement move
+    (``md_energy_chunks`` points each) as ``md_segments/energy`` in the file;
+    not resumable.  ``rep_A``
     defaults to each engine's own value.  Returns the engine's result (final MD
     state for canonical, result dict for grand canonical).
     """
@@ -110,4 +116,6 @@ def run_simulation(ensemble, path, *, opening_angle, E_AB, box_area, n_equil, n_
     return _grand_canonical(path, **common, mu=mu, N_init=N_init, md_steps=md_steps,
                             md_dt=md_dt, gamma=gamma, f_disp=f_disp,
                             rep_A=10_000.0 if rep_A is None else rep_A,
-                            checkpoint_interval=checkpoint_interval, verbose=verbose)
+                            checkpoint_interval=checkpoint_interval, verbose=verbose,
+                            dump_md_energies=dump_md_energies,
+                            md_energy_chunks=md_energy_chunks)

@@ -4,11 +4,12 @@ HDF5 trajectory store shared by both ensembles (spec #1, ADR-0001/0002).
 Small interface
 ---------------
 Writer  : ``TrajectoryWriter(path, attrs, resume=False, precision='float64')``
-          ``append_frame``, ``write_restart``, ``set_attrs``, ``flush``, ``close``
+          ``append_frame``, ``write_restart``, ``set_attrs``, ``write_array``, ``flush``,
+          ``close``
 Reader  : ``open_trajectory(path)`` -> ``TrajectoryReader`` (HDF5) or
           ``LegacyReader`` (``.npz`` / pickled ``.npy``), same interface:
           ``attrs``, ``n_frames(phase)``, ``frames(phase, start, stop, step)``,
-          ``series(phase, name)``, ``read_restart()``.
+          ``series(phase, name)``, ``read_restart()``, ``read_array(name)``.
 
 File schema (version 1)
 -----------------------
@@ -28,6 +29,9 @@ Group ``/restart`` (absent until the first checkpoint): attributes ``phase``
     ('equilibration' | 'production' | 'done'), ``phase_step`` and any extra
     caller attributes; datasets ``leaf_0 ... leaf_k`` (flattened MD state).
     After a run completes, phase is 'done' and it holds the final state.
+Optional extras (not in the common schema): ``/md_segments/energy`` (n_moves,
+    n_chunks) float, the total energy along each MD displacement move of a
+    grand-canonical run made with ``dump_md_energies``.
 
 Resume: opening with ``resume=True`` drops every frame written after the last
 ``write_restart`` (those are recomputed), so a resumed run never duplicates
@@ -206,6 +210,13 @@ class TrajectoryWriter:
     def flush(self):
         self._f.flush()
 
+    def write_array(self, name, data):
+        """Store an optional extra array at ``name`` (e.g. ``md_segments/energy``),
+        replacing an existing one.  Not part of the common schema."""
+        if name in self._f:
+            del self._f[name]
+        self._f.create_dataset(name, data=np.asarray(data), compression='gzip')
+
     def close(self):
         if self._f:
             self._f.flush()
@@ -276,6 +287,10 @@ class TrajectoryReader:
     def read_restart(self):
         return _read_restart(self._f)
 
+    def read_array(self, name):
+        """Optional extra array written with ``write_array``, or None."""
+        return self._f[name][:] if name in self._f else None
+
 
 # ══════════════════════════════════════════════════════════════════════════
 # Legacy loaders (pre-HDF5 outputs) behind the same reader interface
@@ -312,6 +327,9 @@ class LegacyReader:
         return self._frames[slice(start, stop, step)]
 
     def read_restart(self):
+        return None
+
+    def read_array(self, name):
         return None
 
 

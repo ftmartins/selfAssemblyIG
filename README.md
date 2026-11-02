@@ -141,7 +141,8 @@ python simulation/runners/run.py --ensemble grand_canonical --opening_angle 1.57
 
 Shared options: `--sample_interval`, `--equilibration_sample_interval` (0 = no
 equilibration frames), `--checkpoint_interval`, `--precision float32|float64`,
-`--seed`, `--kT`, `--E_AA`, `--E_BB`, `--rep_A`, `--resume`, `--quiet`, and
+`--seed`, `--kT`, `--E_AA`, `--E_BB`, `--rep_A`, `--resume`, `--quiet`, grand-canonical `--dump_md_energies` (energy along every MD move,
+stored as `md_segments/energy`), and
 `--initial_condition dispersed|preassembled` (random monomers, or complete rings
 of the size matching the opening angle: the forward/backward equilibrium check).
 `simulation/runners/run_gcmc.py` and `run_yield*.py` are wrappers around the
