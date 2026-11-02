@@ -91,9 +91,22 @@ python -m compileall base simulation analysis benchmarks
 python -c "import base.config, base.geometry, base.energy, base.params, base.grids, base.paths, base.initial_conditions, base.structure_detection, base.io"   # no stdout
 python -c "import simulation.src.gcmc, simulation.src.canonical_md, simulation.src.design, analysis.mu_scan, analysis.yields, analysis.plotting, analysis.gcmc_runs"
 python simulation/runners/preview_grid.py
-python simulation/runners/run_gcmc.py --opening_angle 1.5708 --E_AB 5 --mu -3 --box_area 400 --n_equil 20 --n_prod 20 --no_checkpoint --output /tmp/g.npz
+python simulation/runners/run_gcmc.py --opening_angle 1.5708 --E_AB 5 --mu -3 --box_area 400 --n_equil 20 --n_prod 20 --no_checkpoint --output /tmp/g.h5
 python analysis/aggregate_mu_scan.py --input_dir data/mu_scan --E_AB 5 --opening_angle 1.5708 --no_plot
 python simulation/runners/optimize_design.py --shape square --opt_steps 2 --batch_size 4
 python simulation/runners/run_yield_cluster.py 0 --output-dir /tmp/yc --equilibration-steps 50 --num-steps 200
 grep -rn "config_patchy_particle\|config_gcmc\|from modules\|import \*" --include='*.py' base simulation analysis benchmarks   # empty
 ```
+
+
+## HDF5 trajectories (spec #1)
+
+- Both engines write the same HDF5 file (`base/trajectory.py`); `run_gcmc.py` now writes `run.h5`
+  instead of `run.npz`. Old `.npz` / pickled `.npy` files still open through `open_trajectory`
+  and `analysis/gcmc_runs.py`.
+- Removed: `save_sim_checkpoint` / `load_sim_checkpoint` and the GCMC `.npy` checkpoint; runs now
+  resume from the restart group in the file.
+- `--dump_md_energies` still works: energies along each MD move go to `md_segments/energy` in the
+  file, the MD trajectories to `md_trajectories.npy` next to it.
+- Morse is no longer truncated at the patch size: ADR-0001 (full Morse to 1.5, smooth window to 2.0).
+- Free-space `total_energy` takes `r_onset`, `r_cutoff` instead of `patch_sigma`.
