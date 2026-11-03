@@ -23,11 +23,11 @@ Contents:
    canonical-ensemble MD driver.
 """
 
-import dataclasses
+from typing import Callable
 
 import numpy as np
 import jax.numpy as jnp
-from jax_md import space, energy as jmd_energy, partition, rigid_body
+from jax_md import dataclasses as jmd_dataclasses, space, energy as jmd_energy, partition, rigid_body
 
 from base.config import ALPHA, MORSE_R_ONSET, MORSE_R_CUTOFF, CENTER_RADIUS
 from base.geometry import thetas_to_shape, patch_positions
@@ -241,6 +241,22 @@ def build_pair_energy_fn(
     return rigid_body.point_energy(pair_fn, shape), shift
 
 
+@jmd_dataclasses.dataclass
+class PairLists:
+    """The two Verlet lists of the neighbor-list energy: core-core pairs among the
+    N particle centres, and inter-particle pairs among the 2N patches."""
+    soft: partition.NeighborList
+    morse: partition.NeighborList
+    update_fn: Callable = jmd_dataclasses.static_field()
+
+    @property
+    def did_buffer_overflow(self):
+        return self.soft.did_buffer_overflow | self.morse.did_buffer_overflow
+
+    def update(self, body, **kwargs):
+        return self.update_fn(body, self, **kwargs)
+
+
 def build_pair_energy_fn_neighbor_list(
     thetas,
     eng_mat,
@@ -255,71 +271,98 @@ def build_pair_energy_fn_neighbor_list(
     capacity_multiplier=2.0,
 ):
     """
-    Neighbor-list twin of :func:`build_pair_energy_fn`: the same energy, but
-    summed over a Verlet list of the 3N particle points (centre + patches)
-    instead of all (3N)^2 pairs.  Cost per step is O(N).
+    Neighbor-list twin of :func:`build_pair_energy_fn`: the same energy, summed
+    over Verlet lists, so the cost per step is O(N).
 
-    The core repulsion vanishes beyond ``2 * center_radius`` and the Morse
-    window beyond ``r_cutoff`` (<= that), so one list of the core diameter
-    serves both.
-    ``dr_threshold`` is the skin: the list is rebuilt once any point has moved
-    more than half of it.
+    The dense energy runs every interaction over all point pairs, but only two
+    kinds are non-zero: core repulsion between particle centres and Morse
+    attraction between patches of different particles.  Here each gets its own
+    list, over the N centres and over the 2N patches (same-particle patch pairs
+    masked out), so the ~70% of pairs in a single all-points list that carry
+    no force are never visited.  The patch pair inside one particle is a rigid-body
+    constant; it is added back as ``N * E_intra`` so energies match the dense
+    function exactly.
+
+    ``dr_threshold`` is the skin: a list is rebuilt once any point has moved more
+    than half of it.  Lists are built from points wrapped into the box (the cell
+    list drops points outside ``[0, L)``).
 
     Returns
     -------
     (neighbor_fns, energy_fn, shift_fn)
-        ``neighbor_fns.allocate(body)`` / ``.update(body, nbrs)`` act on the
-        ``RigidBody``; ``energy_fn(body, neighbor)`` -> scalar.
+        ``neighbor_fns.allocate(body, extra_capacity=0)`` / ``.update(body, lists)``
+        act on the ``RigidBody`` and give a :class:`PairLists`;
+        ``energy_fn(body, neighbor)`` -> scalar.
     """
     displacement, shift = space.periodic(box_size)
-    n_species = 1 + len(thetas)
-
-    morse_eps = jnp.pad(eng_mat, pad_width=(1, 0))
-    soft_sphere_eps = jnp.zeros((n_species, n_species)).at[0, 0].set(rep_A)
-
+    L = float(box_size)
+    n_patch = len(thetas)
     core_sigma = center_radius * 2
     if float(r_cutoff) > float(core_sigma):
-        raise ValueError('neighbor list is sized by the core diameter; Morse r_cutoff '
+        raise ValueError('lists are sized by the core diameter; Morse r_cutoff '
                          'must not exceed it')
-    _, pair_soft = jmd_energy.soft_sphere_neighbor_list(
-        displacement, box_size, species=n_species, sigma=core_sigma,
-        epsilon=soft_sphere_eps, dr_threshold=dr_threshold,
+    shape = thetas_to_shape(thetas, radius=center_radius)
+
+    _, soft_fn = jmd_energy.soft_sphere_neighbor_list(
+        displacement, box_size, sigma=core_sigma, epsilon=rep_A,
+        dr_threshold=dr_threshold,
     )
-    _, pair_morse = jmd_energy.morse_neighbor_list(
-        displacement, box_size, species=n_species, sigma=0.0, epsilon=morse_eps,
+    _, morse_fn = jmd_energy.morse_neighbor_list(
+        displacement, box_size, species=n_patch, sigma=0.0, epsilon=eng_mat,
         alpha=alpha_morse, r_onset=r_onset, r_cutoff=r_cutoff,
         dr_threshold=dr_threshold,
     )
-    # The list itself is built here with plain-float settings: jax-md's helpers
-    # hand it jnp scalars, which jit cannot compare as static metadata when a
-    # second system re-enters a cached jitted function.
-    neighbor_fn = partition.neighbor_list(
-        displacement, float(box_size), float(core_sigma), float(dr_threshold),
-        capacity_multiplier=float(capacity_multiplier),
-        format=partition.OrderedSparse,
-    )
-    pair_fn = lambda R, neighbor, **kw: (pair_soft(R, neighbor, **kw)
-                                         + pair_morse(R, neighbor, **kw))
+    # The lists are built here with plain-float settings: jax-md's helpers hand
+    # them jnp scalars, which jit cannot compare as static metadata when a second
+    # system re-enters a cached jitted function.
+    def different_particle(idx):
+        n = idx.shape[0]
+        same = idx // n_patch == (jnp.arange(n) // n_patch)[:, None]
+        return jnp.where(same, n, idx)
 
-    shape = thetas_to_shape(thetas, radius=center_radius)
-    # Patch points of a particle near the box edge fall outside [0, L); the cell
-    # list drops such points, so the list is built from wrapped points (the energy
-    # itself uses the periodic minimum image and needs no wrapping).
-    L = float(box_size)
+    common = dict(capacity_multiplier=float(capacity_multiplier),
+                  format=partition.OrderedSparse)
+    soft_list = partition.neighbor_list(
+        displacement, L, float(core_sigma), float(dr_threshold), **common)
+    morse_list = partition.neighbor_list(
+        displacement, L, float(r_cutoff), float(dr_threshold),
+        custom_mask_function=different_particle, **common)
 
-    def points(body):
-        pos, _ = rigid_body.union_to_points(body, shape, None)
-        return jnp.mod(pos, L)
+    def split(body):
+        pts, _ = rigid_body.union_to_points(body, shape, None)
+        pts = pts.reshape(-1, 1 + n_patch, 2)
+        return pts[:, 0], pts[:, 1:].reshape(-1, 2)
+
+    def split_wrapped(body):
+        centres, patches = split(body)
+        return jnp.mod(centres, L), jnp.mod(patches, L)
+
+    def allocate(body, extra_capacity=0, **kwargs):
+        centres, patches = split_wrapped(body)
+        return PairLists(
+            soft_list.allocate(centres, extra_capacity=extra_capacity, **kwargs),
+            morse_list.allocate(patches, extra_capacity=extra_capacity, **kwargs),
+            update_fn=update)
+
+    def update(body, lists, **kwargs):
+        centres, patches = split_wrapped(body)
+        return PairLists(
+            soft_list.update(centres, lists.soft, **kwargs),
+            morse_list.update(patches, lists.morse, **kwargs),
+            update_fn=update)
+
+    # Energy of one isolated particle: its own patch pair, constant under rigid motion.
+    dense_fn, _ = build_pair_energy_fn(
+        thetas, eng_mat, box_size, rep_A=rep_A, alpha_morse=alpha_morse,
+        r_onset=r_onset, r_cutoff=r_cutoff, center_radius=center_radius)
+    E_intra = float(dense_fn(rigid_body.RigidBody(
+        jnp.full((1, 2), L / 2), jnp.zeros(1))))
 
     def energy_fn(body, neighbor, **kwargs):
-        pos, species = rigid_body.union_to_points(body, shape, None)
-        return pair_fn(pos, neighbor=neighbor, species=species, **kwargs)
-
-    def allocate(body, **kwargs):
-        nbrs = neighbor_fn.allocate(points(body), **kwargs)
-        return dataclasses.replace(nbrs, update_fn=update)
-
-    def update(body, neighbor, **kwargs):
-        return neighbor_fn.update(points(body), neighbor, **kwargs)
+        centres, patches = split(body)
+        patch_species = jnp.tile(jnp.arange(n_patch), centres.shape[0])
+        return (soft_fn(centres, neighbor.soft)
+                + morse_fn(patches, neighbor.morse, species=patch_species)
+                + centres.shape[0] * E_intra)
 
     return partition.NeighborListFns(allocate, update), energy_fn, shift
