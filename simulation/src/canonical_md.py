@@ -177,7 +177,7 @@ v_random_IC = vmap(random_IC, in_axes=(None, 0, None, None))
 
 def _model_attrs(params, num_particles, box_size, num_steps, equilibration_steps,
                  kT, dt, sample_interval, equilibration_sample_interval, seed,
-                 initial_condition):
+                 initial_condition, chain_length=5, chain_steps=2, sy_steps=3):
     E_AA, E_BB, E_AB = float(params.E_RR), float(params.E_BB), float(params.E_RB)
     return dict(
         ensemble='canonical', engine='nvt_nose_hoover', thermostat='nose_hoover_chain',
@@ -189,7 +189,8 @@ def _model_attrs(params, num_particles, box_size, num_steps, equilibration_steps
         num_production_steps=int(num_steps),
         sample_interval=int(sample_interval),
         equilibration_sample_interval=int(equilibration_sample_interval),
-        initial_condition=initial_condition,
+        initial_condition=initial_condition, nhc_chain_length=int(chain_length),
+        nhc_chain_steps=int(chain_steps), nhc_sy_steps=int(sy_steps),
     )
 
 
@@ -199,7 +200,8 @@ def run_many_particle_md(num_particles, box_size, params, num_steps, kT, key, dt
                          equilibration_sample_interval=0,
                          trajectory_path=None, resume=False, precision='float64',
                          checkpoint_interval=200_000, seed=None,
-                         initial_condition='dispersed', neighbor_list=True):
+                         initial_condition='dispersed', neighbor_list=True,
+                         chain_length=5, chain_steps=2, sy_steps=3):
     """
     Many-particle NVT MD, chunked, streaming every sampled frame to the HDF5
     trajectory store (:mod:`base.trajectory`) at ``trajectory_path``.
@@ -224,6 +226,11 @@ def run_many_particle_md(num_particles, box_size, params, num_steps, kT, key, dt
     that overflows its capacity is re-run from its start with a larger list (the
     dynamics are deterministic, so the re-run is identical).
 
+    ``chain_length`` / ``chain_steps`` / ``sy_steps`` are the Nose-Hoover chain
+    settings (chain links, chain sub-steps, Suzuki-Yoshida order).  The chain is a
+    run of tiny sequential operations, so on a GPU it dominates the cost of a step;
+    smaller values are cheaper.
+
     Returns the final MD state.
     """
     if trajectory_path is None:
@@ -234,14 +241,18 @@ def run_many_particle_md(num_particles, box_size, params, num_steps, kT, key, dt
         nbr_fns, energy_fn, shift, shape = neighbor_list_energy_fn_from_simple_params(
             params, box_size)
         nbrs = nbr_fns.allocate(x0, extra_capacity=NEIGHBOR_EXTRA_CAPACITY)
-        init_fn, step_fn = simulate.nvt_nose_hoover(energy_fn, shift, dt, kT)
+        init_fn, step_fn = simulate.nvt_nose_hoover(
+            energy_fn, shift, dt, kT, chain_length=chain_length,
+            chain_steps=chain_steps, sy_steps=sy_steps)
         state = init_fn(key, x0, mass=shape.mass(), neighbor=nbrs)
         step = lambda st, nb: step_fn(st, neighbor=nb)
         refresh = lambda st, nb: nb.update(st.position)
         potential = lambda pos, nb: energy_fn(pos, neighbor=nb)
     else:
         energy_fn, shift, shape = energy_fn_from_simple_params(params, box_size)
-        init_fn, step_fn = simulate.nvt_nose_hoover(energy_fn, shift, dt, kT)
+        init_fn, step_fn = simulate.nvt_nose_hoover(
+            energy_fn, shift, dt, kT, chain_length=chain_length,
+            chain_steps=chain_steps, sy_steps=sy_steps)
         state = init_fn(key, x0, mass=shape.mass())
         nbrs = None
         step = lambda st, nb: step_fn(st)
@@ -293,7 +304,7 @@ def run_many_particle_md(num_particles, box_size, params, num_steps, kT, key, dt
 
     attrs = _model_attrs(params, num_particles, box_size, num_steps, equilibration_steps,
                          kT, dt, sample_interval, equilibration_sample_interval, seed,
-                         initial_condition)
+                         initial_condition, chain_length, chain_steps, sy_steps)
     writer = TrajectoryWriter(trajectory_path, attrs, resume=resume, precision=precision)
 
     def record(st, phase, step):

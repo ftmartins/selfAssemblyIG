@@ -115,7 +115,7 @@ default) continues from the file without duplicating frames.
 Root attributes (a test checks this list against files from both ensembles):
 
 - Both ensembles: `schema_version`, `software_version`, `precision`, `ensemble`, `engine`, `thermostat`, `seed`, `box_size`, `kT`, `opening_angle`, `E_AA`, `E_BB`, `E_AB`, `bond_specificity`, `rep_A`, `alpha`, `patch_radius`, `morse_r_onset`, `morse_r_cutoff`, `center_radius`, `num_equilibration_steps`, `num_production_steps`, `sample_interval`, `equilibration_sample_interval`, `initial_condition`
-- Canonical only: `N`, `dt`
+- Canonical only: `N`, `dt`, `nhc_chain_length`, `nhc_chain_steps`, `nhc_sy_steps`
 - Grand canonical only: `mu`, `N_init`, `f_disp`, `md_steps`, `md_dt`, `gamma`, `acc_insertion`, `acc_deletion`, `acc_displacement`
 
 `precision` is the dtype of coordinates; energies are always float64.  In the

@@ -54,6 +54,9 @@ def parse_args(argv=None):
     c.add_argument('--dt', type=float, default=1e-3)
     c.add_argument('--dense', action='store_true',
                    help='dense O(N^2) energy instead of the neighbor list (reference)')
+    c.add_argument('--nhc_chain_length', type=int, default=5, help='Nose-Hoover chain links')
+    c.add_argument('--nhc_chain_steps', type=int, default=2, help='Nose-Hoover chain sub-steps')
+    c.add_argument('--nhc_sy_steps', type=int, default=3, help='Suzuki-Yoshida order')
     g = p.add_argument_group('grand canonical')
     g.add_argument('--mu', type=float, default=None, help='chemical potential (kT units)')
     g.add_argument('--N_init', type=int, default=GC.n_init)
@@ -85,7 +88,9 @@ def main(argv=None):
         equilibration_sample_interval=a.equilibration_sample_interval,
         precision=a.precision, resume=a.resume, verbose=not a.quiet,
         initial_condition=a.initial_condition, dump_md_energies=a.dump_md_energies,
-        md_energy_chunks=a.md_energy_chunks, neighbor_list=not a.dense)
+        md_energy_chunks=a.md_energy_chunks, neighbor_list=not a.dense,
+        chain_length=a.nhc_chain_length, chain_steps=a.nhc_chain_steps,
+        sy_steps=a.nhc_sy_steps)
     print(f'Saved: {a.output}')
 
 
