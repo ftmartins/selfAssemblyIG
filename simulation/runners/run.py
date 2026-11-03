@@ -52,6 +52,8 @@ def parse_args(argv=None):
     c = p.add_argument_group('canonical')
     c.add_argument('--N', type=int, default=None)
     c.add_argument('--dt', type=float, default=1e-3)
+    c.add_argument('--dense', action='store_true',
+                   help='dense O(N^2) energy instead of the neighbor list (reference)')
     g = p.add_argument_group('grand canonical')
     g.add_argument('--mu', type=float, default=None, help='chemical potential (kT units)')
     g.add_argument('--N_init', type=int, default=GC.n_init)
@@ -83,7 +85,7 @@ def main(argv=None):
         equilibration_sample_interval=a.equilibration_sample_interval,
         precision=a.precision, resume=a.resume, verbose=not a.quiet,
         initial_condition=a.initial_condition, dump_md_energies=a.dump_md_energies,
-        md_energy_chunks=a.md_energy_chunks)
+        md_energy_chunks=a.md_energy_chunks, neighbor_list=not a.dense)
     print(f'Saved: {a.output}')
 
 

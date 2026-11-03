@@ -18,7 +18,7 @@ ENSEMBLES = ('canonical', 'grand_canonical')
 def _canonical(path, *, opening_angle, E_AB, box_area, N, n_equil, n_prod,
                sample_interval, seed, kT, E_AA, E_BB, rep_A, dt,
                checkpoint_interval, equilibration_sample_interval, precision, resume,
-               initial_condition):
+               initial_condition, neighbor_list):
     import jax
     from base.initial_conditions import preassembled_rings, rsa_2d
     from base.params import SimpleParams
@@ -43,7 +43,7 @@ def _canonical(path, *, opening_angle, E_AB, box_area, N, n_equil, n_prod,
         equilibration_sample_interval=equilibration_sample_interval,
         trajectory_path=path, resume=resume, precision=precision,
         checkpoint_interval=checkpoint_interval, seed=seed,
-        initial_condition=initial_condition)
+        initial_condition=initial_condition, neighbor_list=neighbor_list)
 
 
 def _grand_canonical(path, *, opening_angle, E_AB, box_area, N_init, mu, n_equil,
@@ -85,7 +85,7 @@ def run_simulation(ensemble, path, *, opening_angle, E_AB, box_area, n_equil, n_
                    mu=None, N_init=16, md_steps=5000, md_dt=1e-2, gamma=1.0, f_disp=0.5,
                    equilibration_sample_interval=0, precision='float64', resume=False,
                    verbose=False, initial_condition='dispersed', dump_md_energies=False,
-                   md_energy_chunks=10):
+                   md_energy_chunks=10, neighbor_list=True):
     """Run one simulation of the given ensemble into the HDF5 file ``path``.
 
     Canonical needs ``N`` (and ``dt``); grand canonical needs ``mu`` (and
@@ -96,7 +96,8 @@ def run_simulation(ensemble, path, *, opening_angle, E_AB, box_area, n_equil, n_
     (``md_energy_chunks`` points each) as ``md_segments/energy`` in the file;
     not resumable.  ``rep_A``
     defaults to each engine's own value.  Returns the engine's result (final MD
-    state for canonical, result dict for grand canonical).
+    state for canonical, result dict for grand canonical).  Canonical only:
+    ``neighbor_list=False`` falls back to the dense O(N^2) energy.
     """
     if ensemble not in ENSEMBLES:
         raise ValueError(f"ensemble must be one of {ENSEMBLES}, got {ensemble!r}")
@@ -108,7 +109,7 @@ def run_simulation(ensemble, path, *, opening_angle, E_AB, box_area, n_equil, n_
     if ensemble == 'canonical':
         if N is None:
             raise ValueError("canonical ensemble requires N")
-        return _canonical(path, **common, N=int(N), dt=dt,
+        return _canonical(path, **common, N=int(N), dt=dt, neighbor_list=neighbor_list,
                           rep_A=10_000.0 if rep_A is None else rep_A,
                           checkpoint_interval=checkpoint_interval or 200_000)
     if mu is None:

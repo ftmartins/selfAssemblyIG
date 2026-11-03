@@ -30,7 +30,7 @@ from base.config import (
     DT, CENTER_RADIUS, ALPHA, NUM_PATCHES, kT as KT_DEFAULT,
 )
 from base.geometry import thetas_to_shape, energy_matrix
-from base.energy import build_pair_energy_fn
+from base.energy import build_pair_energy_fn, build_pair_energy_fn_neighbor_list
 from base.trajectory import TrajectoryWriter
 
 __all__ = [
@@ -63,6 +63,20 @@ def energy_fn_from_simple_params(params, box_size):
     return energy_fn, shift, thetas_to_shape(thetas, radius=CENTER_RADIUS)
 
 
+def neighbor_list_energy_fn_from_simple_params(params, box_size):
+    """
+    Neighbor-list twin of :func:`energy_fn_from_simple_params`:
+    ``(neighbor_fns, energy_fn, shift_fn, shape)`` with ``energy_fn(body, neighbor)``.
+    """
+    thetas = jnp.array([0.0, params.alpha])
+    eng_mat = energy_matrix(jnp.array([params.E_RR, params.E_RB, params.E_BB]))
+    neighbor_fns, energy_fn, shift = build_pair_energy_fn_neighbor_list(
+        thetas, eng_mat, box_size, rep_A=params.rep_A,
+        alpha_morse=ALPHA, center_radius=CENTER_RADIUS,
+    )
+    return neighbor_fns, energy_fn, shift, thetas_to_shape(thetas, radius=CENTER_RADIUS)
+
+
 def energy_fn_from_design_vector(thetas_and_energy, box_size,
                                 center_radius=CENTER_RADIUS):
     """
@@ -93,6 +107,10 @@ class YieldDefaults:
 
 
 DEFAULTS = YieldDefaults()
+
+# Spare neighbor-list slots per point.  A dispersed start has few pairs, a
+# clustered system many more, so the list is allocated generously up front.
+NEIGHBOR_EXTRA_CAPACITY = 8
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -181,7 +199,7 @@ def run_many_particle_md(num_particles, box_size, params, num_steps, kT, key, dt
                          equilibration_sample_interval=0,
                          trajectory_path=None, resume=False, precision='float64',
                          checkpoint_interval=200_000, seed=None,
-                         initial_condition='dispersed'):
+                         initial_condition='dispersed', neighbor_list=True):
     """
     Many-particle NVT MD, chunked, streaming every sampled frame to the HDF5
     trajectory store (:mod:`base.trajectory`) at ``trajectory_path``.
@@ -200,34 +218,78 @@ def run_many_particle_md(num_particles, box_size, params, num_steps, kT, key, dt
     ``initial_condition`` (``'dispersed'`` / ``'preassembled'``) is recorded as a
     root attribute only; the caller builds the start.
 
+    ``neighbor_list=True`` sums the energy over a Verlet list (O(N) per step);
+    ``False`` uses the dense all-pairs energy (O(N^2), the reference).  The list
+    is not persisted: it is rebuilt from the positions on resume, and a chunk
+    that overflows its capacity is re-run from its start with a larger list (the
+    dynamics are deterministic, so the re-run is identical).
+
     Returns the final MD state.
     """
     if trajectory_path is None:
         raise ValueError('trajectory_path is required')
-    energy_fn, shift, shape = energy_fn_from_simple_params(params, box_size)
-    init_fn, step_fn = simulate.nvt_nose_hoover(energy_fn, shift, dt, kT)
     x0 = rigid_body.RigidBody(jnp.asarray(initial_positions),
                               jnp.asarray(initial_orientations))
-    state = init_fn(key, x0, mass=shape.mass())
+    if neighbor_list:
+        nbr_fns, energy_fn, shift, shape = neighbor_list_energy_fn_from_simple_params(
+            params, box_size)
+        nbrs = nbr_fns.allocate(x0, extra_capacity=NEIGHBOR_EXTRA_CAPACITY)
+        init_fn, step_fn = simulate.nvt_nose_hoover(energy_fn, shift, dt, kT)
+        state = init_fn(key, x0, mass=shape.mass(), neighbor=nbrs)
+        step = lambda st, nb: step_fn(st, neighbor=nb)
+        refresh = lambda st, nb: nb.update(st.position)
+        potential = lambda pos, nb: energy_fn(pos, neighbor=nb)
+    else:
+        energy_fn, shift, shape = energy_fn_from_simple_params(params, box_size)
+        init_fn, step_fn = simulate.nvt_nose_hoover(energy_fn, shift, dt, kT)
+        state = init_fn(key, x0, mass=shape.mass())
+        nbrs = None
+        step = lambda st, nb: step_fn(st)
+        refresh = lambda st, nb: nb
+        potential = lambda pos, nb: energy_fn(pos)
     treedef = jax.tree_util.tree_structure(state)
 
-    def observe(st):
+    def observe(st, nb):
         return (st.position.center, st.position.orientation,
-                energy_fn(st.position),
+                potential(st.position, nb),
                 rigid_body.kinetic_energy(st.position, st.momentum, st.mass))
 
     observe = jit(observe)
 
-    @partial(jit, static_argnums=(1,))
-    def advance(st, n):
-        return lax.scan(lambda c, _: (step_fn(c), None), st, None, length=n)[0]
-
-    @partial(jit, static_argnums=(1, 2))
-    def advance_sampled(st, n_samples, interval):
+    @partial(jit, static_argnums=(2,))
+    def advance(st, nb, n):
         def body(c, _):
-            c = advance(c, interval)
-            return c, observe(c)
-        return lax.scan(body, st, None, length=n_samples)
+            s_, nb_ = c
+            s_ = step(s_, nb_)
+            return (s_, refresh(s_, nb_)), None
+        return lax.scan(body, (st, nb), None, length=n)[0]
+
+    @partial(jit, static_argnums=(2, 3))
+    def advance_sampled(st, nb, n_samples, interval):
+        def body(c, _):
+            c = advance(*c, interval)
+            return c, observe(*c)
+        return lax.scan(body, (st, nb), None, length=n_samples)
+
+    def run_chunk(fn, st, *args):
+        """Run ``fn(st, nbrs, *args)``; on neighbor-list overflow reallocate a larger
+        list at the chunk's start state and run it again."""
+        nonlocal nbrs
+        extra = NEIGHBOR_EXTRA_CAPACITY
+        while True:
+            out = fn(st, nbrs, *args)
+            new_nbrs = (out[0] if fn is advance_sampled else out)[1]
+            if new_nbrs is None or not bool(new_nbrs.did_buffer_overflow):
+                nbrs = new_nbrs
+                return out
+            # extra_capacity is per point (3N points); it also pads each cell
+            extra *= 2
+            if extra > 256:
+                raise RuntimeError('neighbor list keeps overflowing; configuration '
+                                   'has probably blown up')
+            print(f"  Neighbor list overflow: reallocating (+{extra} pairs per point)",
+                  flush=True)
+            nbrs = nbr_fns.allocate(st.position, extra_capacity=extra)
 
     attrs = _model_attrs(params, num_particles, box_size, num_steps, equilibration_steps,
                          kT, dt, sample_interval, equilibration_sample_interval, seed,
@@ -235,7 +297,7 @@ def run_many_particle_md(num_particles, box_size, params, num_steps, kT, key, dt
     writer = TrajectoryWriter(trajectory_path, attrs, resume=resume, precision=precision)
 
     def record(st, phase, step):
-        pos, ori, pe, ke = observe(st)
+        pos, ori, pe, ke = observe(st, nbrs)
         writer.append_frame(np.asarray(pos), np.asarray(ori), float(pe), step,
                             phase=phase, kinetic_energy=float(ke))
 
@@ -248,6 +310,9 @@ def run_many_particle_md(num_particles, box_size, params, num_steps, kT, key, dt
     if writer.restart is not None:
         phase, done, leaves, _ = writer.restart[:4]
         state = jax.tree_util.tree_unflatten(treedef, [jnp.asarray(l) for l in leaves])
+        if neighbor_list:
+            nbrs = nbr_fns.allocate(state.position,
+                                    extra_capacity=NEIGHBOR_EXTRA_CAPACITY)
         print(f"  Resumed from checkpoint: phase={phase}, step={done:,}", flush=True)
 
     try:
@@ -268,14 +333,15 @@ def run_many_particle_md(num_particles, box_size, params, num_steps, kT, key, dt
                 c = min(chunk, total - start)
                 n_s = c // interval if interval > 0 else 0
                 if n_s:
-                    state, (pos, ori, pe, ke) = advance_sampled(state, n_s, interval)
+                    (state, _), (pos, ori, pe, ke) = run_chunk(
+                        advance_sampled, state, n_s, interval)
                     pos, ori, pe, ke = map(np.asarray, (pos, ori, pe, ke))
                     for k in range(n_s):
                         writer.append_frame(pos[k], ori[k], pe[k],
                                             start + interval * (k + 1), phase=name,
                                             kinetic_energy=ke[k])
                 if c - n_s * interval:
-                    state = advance(state, c - n_s * interval)
+                    state, _ = run_chunk(advance, state, c - n_s * interval)
                 start += c
                 print(f"  {name.capitalize()}: {start:,}/{total:,}", flush=True)
                 checkpoint(state, name, start)

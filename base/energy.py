@@ -23,9 +23,11 @@ Contents:
    canonical-ensemble MD driver.
 """
 
+import dataclasses
+
 import numpy as np
 import jax.numpy as jnp
-from jax_md import space, energy as jmd_energy, rigid_body
+from jax_md import space, energy as jmd_energy, partition, rigid_body
 
 from base.config import ALPHA, MORSE_R_ONSET, MORSE_R_CUTOFF, CENTER_RADIUS
 from base.geometry import thetas_to_shape, patch_positions
@@ -237,3 +239,87 @@ def build_pair_energy_fn(
 
     shape = thetas_to_shape(thetas, radius=center_radius)
     return rigid_body.point_energy(pair_fn, shape), shift
+
+
+def build_pair_energy_fn_neighbor_list(
+    thetas,
+    eng_mat,
+    box_size,
+    *,
+    rep_A,
+    alpha_morse=ALPHA,
+    r_onset=MORSE_R_ONSET,
+    r_cutoff=MORSE_R_CUTOFF,
+    center_radius=CENTER_RADIUS,
+    dr_threshold=0.5,
+    capacity_multiplier=2.0,
+):
+    """
+    Neighbor-list twin of :func:`build_pair_energy_fn`: the same energy, but
+    summed over a Verlet list of the 3N particle points (centre + patches)
+    instead of all (3N)^2 pairs.  Cost per step is O(N).
+
+    The core repulsion vanishes beyond ``2 * center_radius`` and the Morse
+    window beyond ``r_cutoff`` (<= that), so one list of the core diameter
+    serves both.
+    ``dr_threshold`` is the skin: the list is rebuilt once any point has moved
+    more than half of it.
+
+    Returns
+    -------
+    (neighbor_fns, energy_fn, shift_fn)
+        ``neighbor_fns.allocate(body)`` / ``.update(body, nbrs)`` act on the
+        ``RigidBody``; ``energy_fn(body, neighbor)`` -> scalar.
+    """
+    displacement, shift = space.periodic(box_size)
+    n_species = 1 + len(thetas)
+
+    morse_eps = jnp.pad(eng_mat, pad_width=(1, 0))
+    soft_sphere_eps = jnp.zeros((n_species, n_species)).at[0, 0].set(rep_A)
+
+    core_sigma = center_radius * 2
+    if float(r_cutoff) > float(core_sigma):
+        raise ValueError('neighbor list is sized by the core diameter; Morse r_cutoff '
+                         'must not exceed it')
+    _, pair_soft = jmd_energy.soft_sphere_neighbor_list(
+        displacement, box_size, species=n_species, sigma=core_sigma,
+        epsilon=soft_sphere_eps, dr_threshold=dr_threshold,
+    )
+    _, pair_morse = jmd_energy.morse_neighbor_list(
+        displacement, box_size, species=n_species, sigma=0.0, epsilon=morse_eps,
+        alpha=alpha_morse, r_onset=r_onset, r_cutoff=r_cutoff,
+        dr_threshold=dr_threshold,
+    )
+    # The list itself is built here with plain-float settings: jax-md's helpers
+    # hand it jnp scalars, which jit cannot compare as static metadata when a
+    # second system re-enters a cached jitted function.
+    neighbor_fn = partition.neighbor_list(
+        displacement, float(box_size), float(core_sigma), float(dr_threshold),
+        capacity_multiplier=float(capacity_multiplier),
+        format=partition.OrderedSparse,
+    )
+    pair_fn = lambda R, neighbor, **kw: (pair_soft(R, neighbor, **kw)
+                                         + pair_morse(R, neighbor, **kw))
+
+    shape = thetas_to_shape(thetas, radius=center_radius)
+    # Patch points of a particle near the box edge fall outside [0, L); the cell
+    # list drops such points, so the list is built from wrapped points (the energy
+    # itself uses the periodic minimum image and needs no wrapping).
+    L = float(box_size)
+
+    def points(body):
+        pos, _ = rigid_body.union_to_points(body, shape, None)
+        return jnp.mod(pos, L)
+
+    def energy_fn(body, neighbor, **kwargs):
+        pos, species = rigid_body.union_to_points(body, shape, None)
+        return pair_fn(pos, neighbor=neighbor, species=species, **kwargs)
+
+    def allocate(body, **kwargs):
+        nbrs = neighbor_fn.allocate(points(body), **kwargs)
+        return dataclasses.replace(nbrs, update_fn=update)
+
+    def update(body, neighbor, **kwargs):
+        return neighbor_fn.update(points(body), neighbor, **kwargs)
+
+    return partition.NeighborListFns(allocate, update), energy_fn, shift
