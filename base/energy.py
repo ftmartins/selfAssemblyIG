@@ -29,7 +29,8 @@ import numpy as np
 import jax.numpy as jnp
 from jax_md import dataclasses as jmd_dataclasses, space, energy as jmd_energy, partition, rigid_body
 
-from base.config import ALPHA, MORSE_R_ONSET, MORSE_R_CUTOFF, CENTER_RADIUS
+from base.config import (ALPHA, MORSE_R_ONSET, MORSE_R_CUTOFF, CENTER_RADIUS,
+                         CORE_EPSILON, CORE_EXPONENT)
 from base.geometry import thetas_to_shape, patch_positions
 
 
@@ -51,10 +52,13 @@ def morse_well(r, eps, alpha):
     return eps * (1.0 - _xp(r).exp(-alpha * r)) ** 2 - eps
 
 
-def soft_sphere_repulsion(r, sigma, prefactor):
-    """Truncated soft-sphere core repulsion ``prefactor * (1 - r/sigma)**2`` for
-    ``r < sigma`` (0 beyond)."""
-    return _xp(r).where(r < sigma, prefactor * (1.0 - r / sigma) ** 2, 0.0)
+def soft_sphere_repulsion(r, sigma, prefactor, exponent=CORE_EXPONENT):
+    """Truncated soft-sphere core repulsion
+    ``prefactor / exponent * (1 - r/sigma)**exponent`` for ``r < sigma`` (0
+    beyond): jax-md's ``soft_sphere`` form, shared by every engine."""
+    xp = _xp(r)
+    overlap = xp.maximum(1.0 - r / sigma, 0.0)
+    return prefactor / exponent * overlap ** exponent
 
 
 def smooth_cutoff_weight(r, r_onset, r_cutoff):
@@ -81,7 +85,7 @@ def total_energy(
     E_AA=1.0,
     E_BB=1.0,
     r_patch=1.0,
-    rep_A=10.0,
+    rep_A=CORE_EPSILON,
     r_onset=MORSE_R_ONSET,
     r_cutoff=MORSE_R_CUTOFF,
 ):
@@ -229,7 +233,7 @@ def build_pair_energy_fn(
 
     pair_soft = jmd_energy.soft_sphere_pair(
         displacement, species=n_species,
-        sigma=center_radius * 2, epsilon=soft_sphere_eps,
+        sigma=center_radius * 2, epsilon=soft_sphere_eps, alpha=CORE_EXPONENT,
     )
     pair_morse = jmd_energy.morse_pair(
         displacement, species=n_species,
@@ -305,7 +309,7 @@ def build_pair_energy_fn_neighbor_list(
 
     _, soft_fn = jmd_energy.soft_sphere_neighbor_list(
         displacement, box_size, sigma=core_sigma, epsilon=rep_A,
-        dr_threshold=dr_threshold,
+        alpha=CORE_EXPONENT, dr_threshold=dr_threshold,
     )
     _, morse_fn = jmd_energy.morse_neighbor_list(
         displacement, box_size, species=n_patch, sigma=0.0, epsilon=eng_mat,

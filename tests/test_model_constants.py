@@ -109,3 +109,32 @@ def test_triangle_default_opening_angle_is_matching_angle():
     cfg = SHAPE_CONFIGS['triangle']
     assert cfg['n_vertices'] == 3
     assert cfg['default_opening_angle'] == pytest.approx(60.0)
+
+
+# Overlapping cores: centers d < 2 apart, patches pointing away so no Morse pair
+# is in range.  Every engine must give eps_c / 2.5 * (1 - d/2)**2.5.
+CORE_OVERLAPS = [1.5, 1.9, 1.99]
+
+
+def core_q(d):
+    return np.array([[0.0, 0.0, np.pi / 2], [d, 0.0, -np.pi / 2]])
+
+
+def expected_core(d):
+    return config.CORE_EPSILON / config.CORE_EXPONENT * (1.0 - d / 2.0) ** config.CORE_EXPONENT
+
+
+@pytest.mark.parametrize('d', CORE_OVERLAPS)
+def test_core_form_agrees_across_engines(d):
+    q = core_q(d)
+    p = make_gcmc_params(OPENING, 0.0, E_AA=0.0, E_BB=0.0, rep_A=config.CORE_EPSILON)
+    want = expected_core(d)
+    assert total_energy_pbc(q, BOX, p) == pytest.approx(want, rel=1e-10)
+    assert float(total_energy_jax(jnp.asarray(q.reshape(-1)), BOX, p)) == pytest.approx(want, rel=1e-10)
+    e = total_energy(jnp.asarray(q.reshape(-1)), OPENING, 0.0, ALPHA, E_AA=0.0, E_BB=0.0)
+    assert float(e) == pytest.approx(want, rel=1e-10)
+    energy_fn, _ = build_pair_energy_fn(jnp.array([0.0, OPENING]),
+                                        energy_matrix(jnp.zeros(3)), BOX,
+                                        rep_A=config.CORE_EPSILON, alpha_morse=ALPHA)
+    body = rigid_body.RigidBody(jnp.asarray(q[:, :2]), jnp.asarray(q[:, 2]))
+    assert float(energy_fn(body)) == pytest.approx(want, rel=1e-8)

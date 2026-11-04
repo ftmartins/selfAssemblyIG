@@ -21,6 +21,11 @@ GCMC_EAB_VALUES = np.array([1., 2., 5., 10., 20., 50.])
 MU_SCAN_VALUES = list(np.arange(-6.0, -1.0, 0.5))
 MU_SCAN_N = len(MU_SCAN_VALUES)
 
+# ── Species partition-function scan (analysis.partition) ───────────────────
+PARTITION_ANGLES_DEG = np.arange(60.0, 140.1, 5.0)
+PARTITION_EAB_VALUES = np.array([5.0, 7.5, 10.0, 12.5, 15.0, 20.0, 25.0, 30.0, 40.0])
+NUM_PARTITION_JOBS = len(PARTITION_ANGLES_DEG) * len(PARTITION_EAB_VALUES)
+
 # ── Random-seed conventions ────────────────────────────────────────────────
 KEY_PARAM_OPT = 0
 KEY_PARAM_YIELD = 1273
@@ -41,3 +46,11 @@ def mu_scan_job_to_params(job_id, mu_values=None, eab_values=None):
     eab_values = GCMC_EAB_VALUES if eab_values is None else eab_values
     n_eab = len(eab_values)
     return float(mu_values[job_id // n_eab]), float(eab_values[job_id % n_eab])
+
+
+def partition_job_to_params(job_id, angles_deg=None, eab_values=None):
+    """``job_id -> (angle_deg, E_AB)`` for the partition scan (E_AB fastest)."""
+    angles_deg = PARTITION_ANGLES_DEG if angles_deg is None else angles_deg
+    eab_values = PARTITION_EAB_VALUES if eab_values is None else eab_values
+    n_eab = len(eab_values)
+    return float(angles_deg[job_id // n_eab]), float(eab_values[job_id % n_eab])

@@ -22,6 +22,8 @@ GCMC_RUNS_DIR = DATA_DIR / "gcmc_runs"          # run_gcmc.py full runs
 MU_SCAN_DIR = DATA_DIR / "mu_scan"              # scan_mu.py SLURM-array NPZs
 YIELD_DIR = DATA_DIR / "yield"                  # canonical yield outputs
 DESIGN_DIR = DATA_DIR / "design"                # optimize_design.py outputs
+PARTITION_DIR = DATA_DIR / "partition"          # scan_partition.py ln q tables
+YIELD_MAP_DIR = DATA_DIR / "yield_maps"         # cached mass-action yield maps
 IC_DIR = DATA_DIR / "initial_conditions"        # cached initial conditions
 ARCHIVE_DIR = DATA_DIR / "_archive"             # pre-refactor result files
 

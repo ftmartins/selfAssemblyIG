@@ -41,10 +41,15 @@ NHC_CHAIN=${NHC_CHAIN:-5}        # Nose-Hoover chain links / sub-steps / Suzuki-
 NHC_CHAIN_STEPS=${NHC_CHAIN_STEPS:-2}
 NHC_SY=${NHC_SY:-3}
 PLAT=${PLAT:-cpu}
-OUT_DIR=${OUT_DIR:-/data2/shared/felipetm/selfAssembly/nvt_N${N}_phi${PHI}_EAA${E_AA}_EBB${E_BB}_EAB${E_AB}_nhc${NHC_CHAIN}${NHC_CHAIN_STEPS}${NHC_SY}_${N_PROD}steps}
+OUT_DIR=${OUT_DIR:-/data2/shared/felipetm/selfAssembly/nvt_N${N}_phi${PHI}_EAA${E_AA}_EBB${E_BB}_EAB${E_AB}_nhc${NHC_CHAIN}${NHC_CHAIN_STEPS}${NHC_SY}_${N_PROD}steps_core2.5}
 
-ANGLES_DEG=(70 90 100)
-ANGLE_DEG=${ANGLES_DEG[$SLURM_ARRAY_TASK_ID]}
+# Tasks run over angles x seeds (seed fastest); set --array=0-(N_ANGLES*N_SEEDS-1).
+#   ANGLES="60 90 75" SEEDS="42 43" sbatch --array=0-5 simulation/runners/slurm/submit_nvt.sh
+read -a ANGLES_DEG <<< "${ANGLES:-70 90 100}"
+read -a SEED_LIST <<< "${SEEDS:-${SEED}}"
+N_SEEDS=${#SEED_LIST[@]}
+ANGLE_DEG=${ANGLES_DEG[$(( SLURM_ARRAY_TASK_ID / N_SEEDS ))]}
+SEED=${SEED_LIST[$(( SLURM_ARRAY_TASK_ID % N_SEEDS ))]}
 OPENING_ANGLE=$(python3 -c "import math; print(math.radians(${ANGLE_DEG}))")
 BOX_AREA=$(python3 -c "import math; print(${N} * math.pi / ${PHI})")
 
@@ -70,4 +75,4 @@ python simulation/runners/run.py --ensemble canonical \
     --sample_interval ${SAMPLE_INTERVAL} --checkpoint_interval ${CHECKPOINT_INTERVAL} \
     --nhc_chain_length ${NHC_CHAIN} --nhc_chain_steps ${NHC_CHAIN_STEPS} --nhc_sy_steps ${NHC_SY} \
     --seed ${SEED} --resume \
-    --output ${OUT_DIR}/theta${ANGLE_DEG}.h5
+    --output ${OUT_DIR}/theta${ANGLE_DEG}_seed${SEED}.h5

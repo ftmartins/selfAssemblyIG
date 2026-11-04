@@ -32,6 +32,11 @@ PATCH_SIZE = PATCH_RADIUS         # legacy alias of PATCH_RADIUS
 MORSE_R_ONSET = 1.5
 MORSE_R_CUTOFF = 2.0
 
+# Near-hard core (ADR-0001): eps_c / k * (1 - d/sigma)**k for d < sigma = 2R,
+# the jax-md soft-sphere form.  One form for every engine and for the theory.
+CORE_EPSILON = 1.0e4
+CORE_EXPONENT = 2.5
+
 # ── Thermodynamics ──────────────────────────────────────────────────────────
 kT = 1.0
 
