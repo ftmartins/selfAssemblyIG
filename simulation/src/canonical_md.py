@@ -320,6 +320,8 @@ def run_many_particle_md(num_particles, box_size, params, num_steps, kT, key, dt
     phase, done = first, 0
     if writer.restart is not None:
         phase, done, leaves, _ = writer.restart[:4]
+        if phase == 'done' and done < num_steps:      # extend a finished run
+            phase = 'production'
         state = jax.tree_util.tree_unflatten(treedef, [jnp.asarray(l) for l in leaves])
         if neighbor_list:
             nbrs = nbr_fns.allocate(state.position,

@@ -19,7 +19,7 @@ N, BOX = 6, 12.0
 EQ, PROD, SI, CK = 20, 40, 10, 20
 
 
-def run(path, resume=False, **kw):
+def run(path, resume=False, prod=PROD, **kw):
     import jax
     params = generate_parameter_grid(np.deg2rad([90.0]), np.array([2.0]))[0]
     pos, ori = rsa_2d(N, BOX, seed=1, centered=False)
@@ -27,7 +27,7 @@ def run(path, resume=False, **kw):
                 equilibration_sample_interval=SI, checkpoint_interval=CK,
                 trajectory_path=path, resume=resume, seed=7)
     args.update(kw)
-    return run_many_particle_md(N, BOX, params, PROD, 1.0, jax.random.PRNGKey(7), 1e-3,
+    return run_many_particle_md(N, BOX, params, prod, 1.0, jax.random.PRNGKey(7), 1e-3,
                                 pos, ori, **args)
 
 
@@ -114,6 +114,20 @@ def test_resume_of_finished_run_adds_nothing(tmp_path):
     run(p, resume=True)
     r = open_trajectory(p)
     assert r.n_frames('production') == PROD // SI + 1
+
+
+def test_resuming_a_finished_run_with_more_steps_extends_it(tmp_path):
+    p = tmp_path / 'extend.h5'
+    run(p)
+    run(p, resume=True, prod=2 * PROD)
+    r = open_trajectory(p)
+    assert list(r.series('production', 'step')) == list(range(0, 2 * PROD + 1, SI))
+    assert r.attrs['num_production_steps'] == 2 * PROD
+    straight = tmp_path / 'straight.h5'
+    run(straight, prod=2 * PROD)
+    s = open_trajectory(straight)
+    np.testing.assert_allclose(r.series('production', 'potential_energy'),
+                               s.series('production', 'potential_energy'), rtol=1e-6)
 
 
 # ── the canonical runners ────────────────────────────────────────────────
